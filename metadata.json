@@ -1,0 +1,6 @@
+{
+  "name": "Live Stream Hub",
+  "description": "A modern Live TV Android application with dynamic M3U8 channel management, categories, dynamic player, and user favorites database.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
