@@ -11,12 +11,7 @@ object M3uParserService {
     private const val TAG = "M3uParserService"
 
     private val okHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .build()
+        com.example.data.CachedHttpClient.getBaseClient()
     }
 
     data class ParsedChannel(

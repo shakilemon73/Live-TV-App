@@ -1226,7 +1226,7 @@ fun CloudSyncSettingsView(
                         }
 
                         Button(
-                            onClick = { viewModel.syncWithCloudGist() },
+                            onClick = { viewModel.syncWithCloudGist(force = true) },
                             enabled = !isLoading,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color.White.copy(alpha = 0.1f),

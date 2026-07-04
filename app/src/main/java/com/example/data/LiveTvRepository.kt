@@ -1,5 +1,8 @@
 package com.example.data
 
+import android.util.Log
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -14,11 +17,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-class LiveTvRepository(private val dao: LiveTvDao) {
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
+class LiveTvRepository(private val dao: LiveTvDao, private val context: android.content.Context) {
+    private val okHttpClient = com.example.data.CachedHttpClient.getClient(context)
 
     companion object {
         val CATEGORIZED_M3U_MAP = mapOf(
@@ -339,7 +339,89 @@ class LiveTvRepository(private val dao: LiveTvDao) {
         }
     }
 
-    suspend fun fetchAndParseM3u(m3uUrl: String = "https://iptv-org.github.io/iptv/index.m3u") = withContext(Dispatchers.IO) {
+    suspend fun fetchAndParseServerDrivenJson(url: String, force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+        val requestBuilder = Request.Builder().url(url)
+        
+        if (!force) {
+            val cachedMeta = dao.getM3uMeta(url)
+            if (cachedMeta != null) {
+                if (!cachedMeta.eTag.isNullOrBlank()) {
+                    requestBuilder.header("If-None-Match", cachedMeta.eTag)
+                }
+                if (!cachedMeta.lastModified.isNullOrBlank()) {
+                    requestBuilder.header("If-Modified-Since", cachedMeta.lastModified)
+                }
+            }
+        }
+        
+        val request = requestBuilder.build()
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                val responseCode = response.code
+                if (responseCode == 304) {
+                    Log.i("LiveTvRepository", "HTTP 304 Not Modified for Server JSON: $url. Trusting local database cache.")
+                    return@withContext false
+                }
+                
+                if (!response.isSuccessful) {
+                    Log.e("LiveTvRepository", "Failed to fetch server JSON: HTTP $responseCode")
+                    return@withContext false
+                }
+                
+                val bodyText = response.body?.string() ?: return@withContext false
+                
+                val moshi = Moshi.Builder()
+                    .addLast(KotlinJsonAdapterFactory())
+                    .build()
+                val adapter = moshi.adapter(UnifiedChannelsResponse::class.java)
+                val responseObj = adapter.fromJson(bodyText) ?: return@withContext false
+                
+                val categoriesToInsert = responseObj.categories.map { cat ->
+                    CategoryEntity(id = cat.id, name = cat.name)
+                }
+                
+                val channelsToInsert = responseObj.channels.map { ch ->
+                    val streams = ch.streams.map { s ->
+                        PlaybackSource(url = s.url, name = s.name, isBroken = s.isBroken)
+                    }
+                    ChannelEntity(
+                        name = ch.name,
+                        streamUrl = ch.streams.firstOrNull()?.url ?: "",
+                        logoUrl = ch.logoUrl ?: "",
+                        categoryId = ch.categoryId,
+                        category = ch.category,
+                        description = ch.description ?: "",
+                        tvgId = ch.tvgId ?: "",
+                        tvgName = ch.tvgName ?: "",
+                        playbackSources = streams,
+                        playlistUrl = url,
+                        lastChecked = System.currentTimeMillis()
+                    )
+                }
+                
+                dao.clearAndInsertUnifiedChannels(categoriesToInsert, channelsToInsert)
+                
+                val newEtag = response.header("ETag")
+                val newLastModified = response.header("Last-Modified")
+                dao.insertM3uMeta(M3uMetaEntity(url = url, eTag = newEtag, lastModified = newLastModified))
+                
+                Log.i("LiveTvRepository", "Successfully synced and imported ${responseObj.channels.size} server-driven channels.")
+                return@withContext true
+            }
+        } catch (e: Exception) {
+            Log.e("LiveTvRepository", "Error fetching/parsing server JSON from $url", e)
+            return@withContext false
+        }
+    }
+
+    suspend fun fetchAndParseM3u(m3uUrl: String = "https://iptv-org.github.io/iptv/index.m3u", force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+        val trimmedUrl = m3uUrl.trim()
+        if (trimmedUrl.endsWith(".json", ignoreCase = true) || trimmedUrl.contains("/channels.json")) {
+            val jsonSuccess = fetchAndParseServerDrivenJson(trimmedUrl, force)
+            return@withContext jsonSuccess
+        }
+
+        var anyModified = false
         try {
             val existingCategories = dao.getAllCategories().first()
             val tempCategories = existingCategories.associate { it.name to it.id }.toMutableMap()
@@ -360,7 +442,7 @@ class LiveTvRepository(private val dao: LiveTvDao) {
                 for ((categoryName, url) in CATEGORIZED_M3U_MAP) {
                     try {
                         val normalizedUrl = normalizeUrl(url)
-                        downloadAndParseM3uContent(
+                        val modified = downloadAndParseM3uContent(
                             urlStr = normalizedUrl,
                             tempCategories = tempCategories,
                             channelsToInsert = channelsToInsert,
@@ -368,8 +450,12 @@ class LiveTvRepository(private val dao: LiveTvDao) {
                             isSubPlaylist = false,
                             categoryOverride = categoryName,
                             parsedStreamUrlsInSession = parsedStreamUrlsInSession,
-                            playlistUrl = normalizedUrl
+                            playlistUrl = normalizedUrl,
+                            force = force
                         )
+                        if (modified) {
+                            anyModified = true
+                        }
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
@@ -389,7 +475,7 @@ class LiveTvRepository(private val dao: LiveTvDao) {
                 for (url in targetUrls) {
                     try {
                         val normalizedUrl = normalizeUrl(url)
-                        downloadAndParseM3uContent(
+                        val modified = downloadAndParseM3uContent(
                             urlStr = normalizedUrl,
                             tempCategories = tempCategories,
                             channelsToInsert = channelsToInsert,
@@ -397,8 +483,12 @@ class LiveTvRepository(private val dao: LiveTvDao) {
                             isSubPlaylist = false,
                             categoryOverride = null,
                             parsedStreamUrlsInSession = parsedStreamUrlsInSession,
-                            playlistUrl = normalizedUrl
+                            playlistUrl = normalizedUrl,
+                            force = force
                         )
+                        if (modified) {
+                            anyModified = true
+                        }
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
@@ -407,11 +497,13 @@ class LiveTvRepository(private val dao: LiveTvDao) {
 
             if (channelsToInsert.isNotEmpty()) {
                 performSmartDeltaSync(channelsToInsert)
+                return@withContext true
             } else {
                 // Last resort fallback only if download succeeded but returned absolutely nothing
                 val categories = dao.getAllCategories().first()
                 if (categories.isEmpty()) {
                     seedFallbackData()
+                    return@withContext true
                 }
             }
         } catch (e: Exception) {
@@ -419,8 +511,10 @@ class LiveTvRepository(private val dao: LiveTvDao) {
             val categories = dao.getAllCategories().first()
             if (categories.isEmpty()) {
                 seedFallbackData()
+                return@withContext true
             }
         }
+        return@withContext anyModified
     }
 
     private fun normalizeUrl(url: String): String {
@@ -474,11 +568,12 @@ class LiveTvRepository(private val dao: LiveTvDao) {
         isSubPlaylist: Boolean = false,
         categoryOverride: String? = null,
         parsedStreamUrlsInSession: MutableSet<String> = mutableSetOf(),
-        playlistUrl: String
-    ) {
+        playlistUrl: String,
+        force: Boolean = false
+    ): Boolean {
         val requestBuilder = Request.Builder().url(urlStr)
 
-        if (!isSubPlaylist) {
+        if (!isSubPlaylist && !force) {
             val cachedMeta = dao.getM3uMeta(urlStr)
             if (cachedMeta != null) {
                 if (!cachedMeta.eTag.isNullOrBlank()) {
@@ -492,14 +587,14 @@ class LiveTvRepository(private val dao: LiveTvDao) {
 
         val request = requestBuilder.build()
         try {
-            okHttpClient.newCall(request).execute().use { response ->
+            return okHttpClient.newCall(request).execute().use { response ->
                 val responseCode = response.code
                 if (!isSubPlaylist && responseCode == 304) {
                     println("HTTP 304 Not Modified for $urlStr. Aborting parse and trusting local cache.")
-                    return
+                    return@use false
                 }
 
-                if (responseCode != 200) return
+                if (responseCode != 200) return@use false
 
                 if (!isSubPlaylist) {
                     val newEtag = response.header("ETag")
@@ -509,7 +604,7 @@ class LiveTvRepository(private val dao: LiveTvDao) {
                     }
                 }
 
-                val body = response.body ?: return
+                val body = response.body ?: return@use false
                 val m3uText = body.string()
                 val parsedList = M3uParserService.parseM3uText(m3uText)
 
@@ -612,7 +707,8 @@ class LiveTvRepository(private val dao: LiveTvDao) {
                                 isSubPlaylist = true,
                                 categoryOverride = categoryOverride,
                                 parsedStreamUrlsInSession = parsedStreamUrlsInSession,
-                                playlistUrl = playlistUrl
+                                playlistUrl = playlistUrl,
+                                force = force
                             )
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -620,10 +716,12 @@ class LiveTvRepository(private val dao: LiveTvDao) {
                         if (channelsToInsert.size >= maxChannels) break
                     }
                 }
+                return@use true
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return false
     }
 
     private suspend fun seedFallbackData() {

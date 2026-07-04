@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Live Stream Hub</string>
+    <string name="attribution_empty_tag"></string>
 </resources>

@@ -6,12 +6,16 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -44,6 +48,7 @@ import com.example.data.GroupedChannel
 import com.example.data.StreamSource
 import com.example.ui.ChannelViewModel
 import com.example.ui.components.VideoPlayer
+import androidx.compose.ui.draw.scale
 import kotlinx.coroutines.delay
 import android.app.Activity
 import android.content.Context
@@ -58,6 +63,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.media3.common.Player
+import android.media.AudioManager
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.CircleShape
 
@@ -69,8 +77,11 @@ fun PlayerScreen(
     modifier: Modifier = Modifier
 ) {
     val selectedChannel by viewModel.selectedChannel.collectAsStateWithLifecycle()
+    val currentStreamUrl by viewModel.currentStreamUrl.collectAsStateWithLifecycle()
+    val currentStreamName by viewModel.currentStreamName.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val allChannels by viewModel.filteredChannels.collectAsStateWithLifecycle()
+    val lowLatencyEnabled by viewModel.lowLatencyMode.collectAsStateWithLifecycle()
     val allDbChannels by viewModel.channels.collectAsStateWithLifecycle()
     val isInPipMode by viewModel.isInPipMode.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -112,10 +123,23 @@ fun PlayerScreen(
     var showDescriptionCard by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showStreamsDropdown by remember { mutableStateOf(false) }
+    var unmeteredSyncOnly by remember { mutableStateOf(viewModel.getUnmeteredSyncOnly()) }
+    var diagnostics by remember { mutableStateOf<com.example.ui.components.PlaybackDiagnostics?>(null) }
 
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
-    var isLandscape by remember { mutableStateOf(false) }
+    var isLandscape by remember { mutableStateOf(true) }
+    var isRotationLocked by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isRotationLocked) {
+        activity?.let { act ->
+            if (isRotationLocked) {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            } else {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
+        }
+    }
 
     val isTv = remember(context) {
         val pm = context.packageManager
@@ -193,6 +217,59 @@ fun PlayerScreen(
         )
     }
     var showBrightnessIndicator by remember { mutableStateOf(false) }
+
+    val audioManager = remember(context) {
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+    val maxVolume = remember(audioManager) {
+        audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+    }
+    var volumeFloat by remember {
+        mutableStateOf(
+            try {
+                audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxVolume
+            } catch (e: Exception) {
+                0.5f
+            }
+        )
+    }
+    var showVolumeIndicator by remember { mutableStateOf(false) }
+
+    var activePlayer by remember { mutableStateOf<Player?>(null) }
+    var showRewindIndicator by remember { mutableStateOf(false) }
+    var showForwardIndicator by remember { mutableStateOf(false) }
+
+    // Sync volume settings with AudioManager
+    LaunchedEffect(volumeFloat) {
+        try {
+            val targetVolume = (volumeFloat * maxVolume).toInt().coerceIn(0, maxVolume)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
+        } catch (e: Exception) {
+            // Ignore volume errors
+        }
+    }
+
+    // Auto-hide volume slider after 1.5 seconds of no drag action
+    LaunchedEffect(volumeFloat, showVolumeIndicator) {
+        if (showVolumeIndicator) {
+            delay(1500)
+            showVolumeIndicator = false
+        }
+    }
+
+    // Auto-hide double tap seek indicators
+    LaunchedEffect(showRewindIndicator) {
+        if (showRewindIndicator) {
+            delay(650)
+            showRewindIndicator = false
+        }
+    }
+    LaunchedEffect(showForwardIndicator) {
+        if (showForwardIndicator) {
+            delay(650)
+            showForwardIndicator = false
+        }
+    }
 
     var selectedQuality by remember { mutableStateOf("Auto") }
     var networkQualityLabel by remember { mutableStateOf("Checking...") }
@@ -302,8 +379,14 @@ fun PlayerScreen(
         }
     }
 
-    DisposableEffect(activity) {
+    DisposableEffect(activity, viewModel) {
+        // Force Landscape Lock on startup
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+
         onDispose {
+            // Reset selected channel to completely stop streaming when leaving the player screen
+            viewModel.selectChannel(null)
+
             // Restore orientation and system bars when leaving
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             val win = activity?.window
@@ -330,6 +413,13 @@ fun PlayerScreen(
     }
 
     val channel = selectedChannel
+    val sameTypeChannels = remember(channel, allDbChannels) {
+        if (channel != null) {
+            allDbChannels.filter { it.categoryId == channel.categoryId }
+        } else {
+            emptyList()
+        }
+    }
     if (channel == null) {
         Box(
             modifier = Modifier
@@ -364,18 +454,40 @@ fun PlayerScreen(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = { if (!isInPipMode) showControls = !showControls }
-            )
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = { offset ->
+                        val width = size.width
+                        if (offset.x < width / 2) {
+                            activePlayer?.let { player ->
+                                val target = (player.currentPosition - 10000).coerceAtLeast(0)
+                                player.seekTo(target)
+                            }
+                            showRewindIndicator = true
+                        } else {
+                            activePlayer?.let { player ->
+                                val target = player.currentPosition + 10000
+                                val duration = if (player.duration > 0) player.duration else Long.MAX_VALUE
+                                player.seekTo(target.coerceIn(0L, duration))
+                            }
+                            showForwardIndicator = true
+                        }
+                    },
+                    onTap = {
+                        if (!isInPipMode) {
+                            showControls = !showControls
+                        }
+                    }
+                )
+            }
     ) {
         // High-Fidelity Custom Video Player
         VideoPlayer(
-            videoUrl = channel.streamUrl,
+            videoUrl = currentStreamUrl ?: channel.streamUrl,
             isPlaying = isPlaying,
             isMuted = isMuted,
             resizeMode = effectiveResizeMode,
+            lowLatencyEnabled = lowLatencyEnabled,
             maxVideoWidth = activeMaxWidth,
             maxVideoHeight = activeMaxHeight,
             onVideoSizeChanged = { w, h ->
@@ -391,13 +503,19 @@ fun PlayerScreen(
                         code == PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE
                 
                 if (isBadHttpStatusOrNetwork) {
-                    viewModel.markChannelAsBrokenAndSkip(channel.id)
+                    viewModel.handlePlaybackError(channel.id, currentStreamUrl ?: channel.streamUrl)
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            onDiagnosticsUpdated = { diagnostics = it },
+            onPlayerReady = { activePlayer = it },
+            modifier = Modifier.fillMaxSize(),
+            streams = groupedChannel?.streams ?: emptyList(),
+            onStreamSwapped = { nextStream ->
+                viewModel.selectStreamSource(nextStream.url, nextStream.subName)
+            }
         )
 
-        // Dim background overlay when controls are visible
+        // Semi-transparent gradient overlay for controls to ensure text readability over bright content
         AnimatedVisibility(
             visible = showControls && !isInPipMode,
             enter = fadeIn(),
@@ -406,7 +524,15 @@ fun PlayerScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.45f))
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.85f),
+                                Color.Black.copy(alpha = 0.45f),
+                                Color.Black.copy(alpha = 0.85f)
+                            )
+                        )
+                    )
             )
         }
 
@@ -452,6 +578,117 @@ fun PlayerScreen(
             )
         }
 
+        // Right-side vertical gesture-based volume control zone
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(0.35f)
+                .align(Alignment.CenterEnd)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            showVolumeIndicator = true
+                        },
+                        onDragEnd = {},
+                        onDragCancel = {},
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val sensitivity = 500f
+                            val delta = -dragAmount / sensitivity
+                            volumeFloat = (volumeFloat + delta).coerceIn(0.0f, 1.0f)
+                            showVolumeIndicator = true
+                        }
+                    )
+                }
+        )
+
+        // Vertical Volume Slider Overlay on the right side
+        AnimatedVisibility(
+            visible = (showVolumeIndicator || (showControls && !isInPipMode)) && !isInPipMode,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 24.dp)
+        ) {
+            VerticalVolumeSlider(
+                volume = volumeFloat,
+                onVolumeChange = {
+                    volumeFloat = it
+                    showVolumeIndicator = true
+                }
+            )
+        }
+
+        // Double-Tap Seek Indicators
+        // Left (Rewind) Indicator
+        AnimatedVisibility(
+            visible = showRewindIndicator,
+            enter = fadeIn(animationSpec = tween(150)),
+            exit = fadeOut(animationSpec = tween(150)),
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 80.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "◀◀",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "-10s",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Right (Forward) Indicator
+        AnimatedVisibility(
+            visible = showForwardIndicator,
+            enter = fadeIn(animationSpec = tween(150)),
+            exit = fadeOut(animationSpec = tween(150)),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 80.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "▶▶",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "+10s",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
         // --- HUD - CONTROLS OVERLAY ---
 
         // 1. TOP HEADER OVERLAY
@@ -469,8 +706,8 @@ fun PlayerScreen(
                             colors = listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)
                         )
                     )
-                    .statusBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -516,6 +753,23 @@ fun PlayerScreen(
                                 letterSpacing = 0.5.sp
                             )
 
+                            if (!currentStreamName.isNullOrEmpty()) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "•",
+                                    fontSize = 11.sp,
+                                    color = Color.White.copy(alpha = 0.5f)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = currentStreamName!!.uppercase(),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF81C784),
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+
                             // Show recording indicator if recording
                             val isThisChannelRecording = isRecording && recordingChannelId == channel.id
                             if (isThisChannelRecording) {
@@ -549,6 +803,128 @@ fun PlayerScreen(
                                 }
                             }
                         }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 6.dp)
+                        ) {
+                            // Stream Health Badge
+                            val health = channel.channelHealth.ifBlank { "Unknown" }
+                            val (healthColor, healthIcon) = when (health.lowercase()) {
+                                "excellent" -> Color(0xFF81C784) to Icons.Default.CheckCircle
+                                "good" -> Color(0xFF4DB6AC) to Icons.Default.CheckCircle
+                                "fair" -> Color(0xFFFFD54F) to Icons.Default.Info
+                                "poor" -> Color(0xFFFFB74D) to Icons.Default.Warning
+                                "offline" -> Color(0xFFFF8A80) to Icons.Default.Warning
+                                else -> Color(0xFFB0BEC5) to Icons.Default.Info
+                            }
+                            
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .background(healthColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                    .border(0.5.dp, healthColor.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = healthIcon,
+                                    contentDescription = "Stream Health Status",
+                                    tint = healthColor,
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "HEALTH: ${health.uppercase()}",
+                                    color = healthColor,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                            
+                            // Real-time Throughput / Bandwidth Badge
+                            val bps = diagnostics?.bitrateEstimate ?: 0L
+                            if (bps > 0) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "•",
+                                    fontSize = 11.sp,
+                                    color = Color.White.copy(alpha = 0.5f)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                
+                                val kbps = bps / 1000
+                                val mbps = kbps / 1000f
+                                val formattedSpeed = if (mbps >= 1.0f) {
+                                    String.format("%.1f Mbps", mbps)
+                                } else {
+                                    "$kbps Kbps"
+                                }
+                                
+                                val bandwidthColor = when {
+                                    mbps >= 4f -> Color(0xFF81C784) // Excellent speed
+                                    mbps >= 1.5f -> Color(0xFF4DB6AC) // Good speed
+                                    mbps >= 0.5f -> Color(0xFFFFD54F) // Fair speed
+                                    else -> Color(0xFFFFB74D) // Low speed
+                                }
+                                
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .background(bandwidthColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                        .border(0.5.dp, bandwidthColor.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Bandwidth Throughput",
+                                        tint = bandwidthColor,
+                                        modifier = Modifier.size(10.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "SPEED: $formattedSpeed",
+                                        color = bandwidthColor,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        // Playback Telemetry Row
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            val ttff = diagnostics?.timeToFirstFrameMs ?: 0L
+                            val rebuffers = diagnostics?.rebufferCount ?: 0
+                            val errorRate = viewModel.getChannelErrorRate(channel.id)
+                            
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+                                    .border(0.5.dp, Color.White.copy(alpha = 0.20f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "Playback Telemetry",
+                                    tint = Color(0xFFD0BCFF),
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "TTFF: ${if (ttff > 0) "${ttff}ms" else "Measuring..."} • REBUFFERS: $rebuffers • ERROR RATE: ${"%.1f".format(errorRate * 100)}%",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -574,6 +950,32 @@ fun PlayerScreen(
                                     .align(Alignment.BottomEnd)
                             )
                         }
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    // Rotation Lock Toggle Button
+                    IconButton(
+                        onClick = { isRotationLocked = !isRotationLocked },
+                        modifier = Modifier
+                            .background(
+                                if (isRotationLocked) Color(0xFFD0BCFF).copy(alpha = 0.25f)
+                                else Color.White.copy(alpha = 0.12f),
+                                RoundedCornerShape(50)
+                            )
+                            .border(
+                                1.dp,
+                                if (isRotationLocked) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.18f),
+                                RoundedCornerShape(50)
+                            )
+                            .testTag("player_rotation_lock_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isRotationLocked) Icons.Default.Lock else Icons.Default.Refresh,
+                            contentDescription = "Rotation Lock",
+                            tint = if (isRotationLocked) Color(0xFFD0BCFF) else Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -611,7 +1013,7 @@ fun PlayerScreen(
                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                                 )
                                 groupedChannel.streams.forEach { stream ->
-                                    val isCurrent = selectedChannel?.streamUrl == stream.url
+                                    val isCurrent = (currentStreamUrl ?: selectedChannel?.streamUrl) == stream.url
                                     DropdownMenuItem(
                                         text = {
                                             Row(
@@ -635,10 +1037,7 @@ fun PlayerScreen(
                                         },
                                         onClick = {
                                             showStreamsDropdown = false
-                                            val targetChannel = allDbChannels.find { it.streamUrl == stream.url }
-                                            if (targetChannel != null) {
-                                                viewModel.selectChannel(targetChannel)
-                                            }
+                                            viewModel.selectStreamSource(stream.url, stream.subName)
                                         }
                                     )
                                 }
@@ -675,10 +1074,10 @@ fun PlayerScreen(
             modifier = Modifier.align(Alignment.Center)
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(32.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Mute/Unmute toggle (Volume Icon)
+                // 1. Mute/Unmute toggle (Volume Icon)
                 Box(
                     modifier = Modifier
                         .size(52.dp)
@@ -690,12 +1089,47 @@ fun PlayerScreen(
                 ) {
                     Text(
                         text = if (isMuted) "🔇" else "🔊",
-                        fontSize = 18.sp,
+                        fontSize = 20.sp,
                         textAlign = TextAlign.Center
                     )
                 }
 
-                // Main Play/Pause Button
+                // 2. Seek Backward 10s button
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                        .clickable {
+                            activePlayer?.let { player ->
+                                val target = (player.currentPosition - 10000).coerceAtLeast(0)
+                                player.seekTo(target)
+                            }
+                            showRewindIndicator = true
+                        }
+                        .testTag("player_seek_backward_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Seek Backward 10s",
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .graphicsLayer(scaleX = -1f) // Flip horizontally for reverse direction
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "-10s",
+                            color = Color.White,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // 3. Main Play/Pause Button
                 Box(
                     modifier = Modifier
                         .size(76.dp)
@@ -723,7 +1157,41 @@ fun PlayerScreen(
                     }
                 }
 
-                // Info / Description toggle button
+                // 4. Seek Forward 10s button
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                        .clickable {
+                            activePlayer?.let { player ->
+                                val target = player.currentPosition + 10000
+                                val duration = if (player.duration > 0) player.duration else Long.MAX_VALUE
+                                player.seekTo(target.coerceIn(0L, duration))
+                            }
+                            showForwardIndicator = true
+                        }
+                        .testTag("player_seek_forward_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Seek Forward 10s",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "+10s",
+                            color = Color.White,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // 5. Info / Description toggle button
                 Box(
                     modifier = Modifier
                         .size(52.dp)
@@ -745,7 +1213,7 @@ fun PlayerScreen(
                         imageVector = Icons.Default.Info,
                         contentDescription = "Toggle Description",
                         tint = if (showDescriptionCard) Color(0xFFD0BCFF) else Color.White,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
@@ -766,8 +1234,8 @@ fun PlayerScreen(
                             colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.95f))
                         )
                     )
-                    .navigationBarsPadding()
-                    .padding(bottom = 12.dp)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(bottom = 8.dp)
             ) {
                 // QUICK SWITCH DRAWER (Horizontal channel line-up)
                 Column(
@@ -787,7 +1255,7 @@ fun PlayerScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "QUICK STREAM SWITCHER",
+                            text = "RECOMMENDED: SAME GENRE FEEDS",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = Color(0xFFD0BCFF),
@@ -861,7 +1329,7 @@ fun PlayerScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             items(
-                                items = allChannels,
+                                items = sameTypeChannels,
                                 key = { it.id },
                                 contentType = { "recommended_item" }
                             ) { otherChannel ->
@@ -936,74 +1404,6 @@ fun PlayerScreen(
                         }
                     }
                 }
-
-                // Collapsible detailed channel overlay card (Only shown when showDescriptionCard is true)
-                AnimatedVisibility(
-                    visible = showDescriptionCard,
-                    enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
-                    exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut(),
-                    modifier = Modifier.padding(top = 12.dp)
-                ) {
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFF1D1B20).copy(alpha = 0.95f)
-                        ),
-                        shape = RoundedCornerShape(24.dp),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Info,
-                                        contentDescription = "Info",
-                                        tint = Color(0xFFD0BCFF),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "About this channel",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = { showDescriptionCard = false },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Close description",
-                                        tint = Color.White.copy(alpha = 0.6f),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Text(
-                                text = channel.description.ifBlank { "No description is set for this channel. Manage it dynamically from the admin panel." },
-                                fontSize = 12.sp,
-                                color = Color.LightGray,
-                                lineHeight = 16.sp,
-                                maxLines = 4,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
             }
         }
 
@@ -1024,9 +1424,10 @@ fun PlayerScreen(
                             onClick = {} // Prevent clicks on card from closing
                         )
                         .fillMaxWidth()
-                        .navigationBarsPadding()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
                         .padding(16.dp)
-                        .widthIn(max = 600.dp),
+                        .widthIn(max = 600.dp)
+                        .heightIn(max = 340.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF1D1B20)),
                     border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
@@ -1034,7 +1435,7 @@ fun PlayerScreen(
                     Column(
                         modifier = Modifier.padding(20.dp)
                     ) {
-                        // Header
+                        // Header (Fixed)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1059,16 +1460,37 @@ fun PlayerScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
-                        // Video Quality Selection
-                        Text(
-                            text = "VIDEO QUALITY",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFFD0BCFF),
-                            letterSpacing = 1.sp
-                        )
+                        // Scrollable content column
+                        Column(
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            // Video Quality Selection
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "VIDEO QUALITY",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color(0xFFD0BCFF),
+                                    letterSpacing = 1.sp
+                                )
+                                Text(
+                                    text = "HIGH PRIORITY",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF81C784),
+                                    modifier = Modifier
+                                        .background(Color(0xFF81C784).copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1116,13 +1538,28 @@ fun PlayerScreen(
                         Spacer(modifier = Modifier.height(20.dp))
 
                         // Aspect Ratio / Scaling Selection
-                        Text(
-                            text = "ASPECT RATIO",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFFD0BCFF),
-                            letterSpacing = 1.sp
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "ASPECT RATIO",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFD0BCFF),
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "HIGH PRIORITY",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF81C784),
+                                modifier = Modifier
+                                    .background(Color(0xFF81C784).copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1160,13 +1597,28 @@ fun PlayerScreen(
                         Spacer(modifier = Modifier.height(20.dp))
 
                         // Action buttons (Record & Favorite)
-                        Text(
-                            text = "QUICK ACTIONS",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFFD0BCFF),
-                            letterSpacing = 1.sp
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "QUICK ACTIONS",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFD0BCFF),
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "MEDIUM PRIORITY",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFFD54F),
+                                modifier = Modifier
+                                    .background(Color(0xFFFFD54F).copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1248,41 +1700,337 @@ fun PlayerScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(20.dp))
 
-                        // Rotation action row
+                        // Low Latency Config Row
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "LATENCY OPTIMIZATION",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFD0BCFF),
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "MEDIUM PRIORITY",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFFD54F),
+                                modifier = Modifier
+                                    .background(Color(0xFFFFD54F).copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(48.dp)
+                                .height(56.dp)
                                 .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
                                 .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
-                                .clickable {
-                                    val newLandscape = !isLandscape
-                                    isLandscape = newLandscape
-                                    activity?.requestedOrientation = if (newLandscape) {
-                                        ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                                    } else {
-                                        ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                                    }
-                                }
+                                .clickable { viewModel.setLowLatencyMode(!lowLatencyEnabled) }
+                                .padding(horizontal = 16.dp)
                         ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "⚡",
+                                    fontSize = 16.sp,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Low-Latency Live Player",
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "Reduces live lag and minimizes playback delay",
+                                        color = Color.LightGray.copy(alpha = 0.8f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = lowLatencyEnabled,
+                                onCheckedChange = { viewModel.setLowLatencyMode(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF381E72),
+                                    checkedTrackColor = Color(0xFFD0BCFF),
+                                    uncheckedThumbColor = Color.Gray,
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.12f)
+                                ),
+                                modifier = Modifier.testTag("settings_low_latency_switch")
+                            )
+                        }
+
+                        // Background Sync Config Row
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "RESOURCE CONSTRAINTS",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFD0BCFF),
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "BATTERY SAVER",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFFD54F),
+                                modifier = Modifier
+                                    .background(Color(0xFFFFD54F).copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                                .clickable { 
+                                    val newValue = !unmeteredSyncOnly
+                                    unmeteredSyncOnly = newValue
+                                    viewModel.setUnmeteredSyncOnly(newValue)
+                                }
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "📶",
+                                    fontSize = 16.sp,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Sync over Wi-Fi Only",
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "Only sync and verify channels when on Wi-Fi",
+                                        color = Color.LightGray.copy(alpha = 0.8f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = unmeteredSyncOnly,
+                                onCheckedChange = { newValue ->
+                                    unmeteredSyncOnly = newValue
+                                    viewModel.setUnmeteredSyncOnly(newValue)
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF381E72),
+                                    checkedTrackColor = Color(0xFFD0BCFF),
+                                    uncheckedThumbColor = Color.Gray,
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.12f)
+                                ),
+                                modifier = Modifier.testTag("settings_unmetered_sync_switch")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Rotation action row allowing toggling
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .background(
+                                    if (isRotationLocked) Color(0xFFD0BCFF).copy(alpha = 0.12f)
+                                    else Color.White.copy(alpha = 0.08f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isRotationLocked) Color(0xFFD0BCFF).copy(alpha = 0.3f)
+                                    else Color.White.copy(alpha = 0.15f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable { isRotationLocked = !isRotationLocked }
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (isRotationLocked) Icons.Default.Lock else Icons.Default.Refresh,
+                                    contentDescription = "Rotation Lock",
+                                    tint = if (isRotationLocked) Color(0xFFD0BCFF) else Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Rotation Lock",
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = if (isRotationLocked) "Forced Landscape Mode Active" else "Auto-rotate with screen tilt",
+                                        color = Color.LightGray.copy(alpha = 0.8f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = isRotationLocked,
+                                onCheckedChange = { isRotationLocked = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF381E72),
+                                    checkedTrackColor = Color(0xFFD0BCFF),
+                                    uncheckedThumbColor = Color.Gray,
+                                    uncheckedTrackColor = Color.White.copy(alpha = 0.12f)
+                                ),
+                                modifier = Modifier.testTag("settings_rotation_lock_switch")
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+        // 5. SIDE-PANEL DETAILED CHANNEL OVERLAY (Sliding from the right)
+        AnimatedVisibility(
+            visible = showDescriptionCard && !isInPipMode,
+            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .widthIn(max = 360.dp)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(16.dp)
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF1D1B20).copy(alpha = 0.95f)
+                ),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(20.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.Refresh, // Rotate icon
-                                contentDescription = "Rotate Screen",
-                                tint = Color.White,
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Info",
+                                tint = Color(0xFFD0BCFF),
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (isLandscape) "Switch to Portrait" else "Switch to Landscape",
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
+                                text = "About this channel",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
                             )
                         }
+
+                        IconButton(
+                            onClick = { showDescriptionCard = false },
+                            modifier = Modifier
+                                .background(Color.White.copy(alpha = 0.08f), CircleShape)
+                                .size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close description",
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Channel Logo and Name
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        AsyncImage(
+                            model = channel.logoUrl,
+                            contentDescription = channel.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White.copy(alpha = 0.1f))
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = channel.name,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = categoryName.uppercase(),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD0BCFF),
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Scrollable Description text
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            text = "CHANNEL DETAILS",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Gray,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = channel.description.ifBlank { "No description is set for this channel. Manage it dynamically from the admin panel." },
+                            fontSize = 12.sp,
+                            color = Color.LightGray,
+                            lineHeight = 18.sp
+                        )
                     }
                 }
             }
@@ -1419,5 +2167,66 @@ fun CustomBrightnessIcon(modifier: Modifier = Modifier, color: Color = Color.Whi
                 .size(8.dp)
                 .background(color, CircleShape)
         )
+    }
+}
+
+@Composable
+fun VerticalVolumeSlider(
+    volume: Float,
+    onVolumeChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .width(44.dp)
+            .height(200.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color.Black.copy(alpha = 0.65f))
+            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(22.dp))
+            .pointerInput(Unit) {
+                detectVerticalDragGestures { change, dragAmount ->
+                    change.consume()
+                    val sensitivity = 200f
+                    val delta = -dragAmount / sensitivity
+                    onVolumeChange((volume + delta).coerceIn(0.0f, 1.0f))
+                }
+            },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(volume.coerceIn(0f, 1f))
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFFD0BCFF),
+                            Color(0xFF81C784)
+                        )
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = if (volume <= 0f) "🔇" else if (volume < 0.5f) "🔉" else "🔊",
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center
+            )
+
+            Text(
+                text = "${(volume * 100).toInt()}%",
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }

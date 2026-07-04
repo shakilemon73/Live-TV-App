@@ -14,6 +14,8 @@ import com.example.data.ChannelEntity
 import com.example.data.RecordingEntity
 import com.example.data.LiveTvRepository
 import com.example.data.BackgroundSyncManager
+import com.example.data.ChannelValidationWorker
+import kotlinx.coroutines.withContext
 import com.example.data.GroupedChannel
 import com.example.data.StreamSource
 import com.example.data.ChannelNameNormalizer
@@ -32,19 +34,17 @@ import java.net.URL
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
 
+@OptIn(UnstableApi::class)
 class ChannelViewModel(
     application: Application,
-    private val repository: LiveTvRepository
+    private val repository: LiveTvRepository,
+    private val syncManager: BackgroundSyncManager
 ) : AndroidViewModel(application) {
 
     private val prefs = application.getSharedPreferences("live_tv_prefs", android.content.Context.MODE_PRIVATE)
-
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(1500, TimeUnit.MILLISECONDS)
-        .readTimeout(1500, TimeUnit.MILLISECONDS)
-        .writeTimeout(1500, TimeUnit.MILLISECONDS)
-        .build()
 
     // --- Core States ---
     val categories: StateFlow<List<CategoryEntity>> = repository.allCategories
@@ -66,7 +66,7 @@ class ChannelViewModel(
     private val _localIsLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = combine(
         _localIsLoading,
-        BackgroundSyncManager.isSyncing
+        syncManager.isSyncing
     ) { local, backgroundSyncing ->
         local || backgroundSyncing
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
@@ -80,15 +80,51 @@ class ChannelViewModel(
     private val _selectedChannel = MutableStateFlow<ChannelEntity?>(null)
     val selectedChannel: StateFlow<ChannelEntity?> = _selectedChannel.asStateFlow()
 
+    private val _recentlyWatchedNames = MutableStateFlow<List<String>>(
+        (prefs.getString("recently_watched_channels", "") ?: "")
+            .split("||")
+            .filter { it.isNotEmpty() }
+    )
+
+    val recentlyWatched: StateFlow<List<GroupedChannel>> = combine(
+        _recentlyWatchedNames,
+        channels
+    ) { names, allChs ->
+        if (allChs.isEmpty() || names.isEmpty()) return@combine emptyList<GroupedChannel>()
+        val groupedAll = groupChannels(allChs)
+        names.mapNotNull { name ->
+            groupedAll.find { it.name.equals(name, ignoreCase = true) }
+        }.take(10)
+    }.flowOn(Dispatchers.Default)
+     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _currentStreamUrl = MutableStateFlow<String?>(null)
+    val currentStreamUrl: StateFlow<String?> = _currentStreamUrl.asStateFlow()
+
+    private val _currentStreamName = MutableStateFlow<String?>(null)
+    val currentStreamName: StateFlow<String?> = _currentStreamName.asStateFlow()
+
+    private val errorCountMap = mutableMapOf<String, Int>()
+
+    // Playback Telemetry Maps
+    private val channelAttemptsMap = mutableMapOf<Int, Int>()
+    private val channelFailuresMap = mutableMapOf<Int, Int>()
+
+    fun getChannelErrorRate(channelId: Int): Float {
+        val attempts = channelAttemptsMap[channelId] ?: 0
+        val failures = channelFailuresMap[channelId] ?: 0
+        return if (attempts == 0) 0f else failures.toFloat() / attempts
+    }
+
     private val _isInPipMode = MutableStateFlow(false)
     val isInPipMode: StateFlow<Boolean> = _isInPipMode.asStateFlow()
 
     private val _isOnline = MutableStateFlow(true)
     val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
 
-    val isCheckingStreams: StateFlow<Boolean> = BackgroundSyncManager.isCheckingStreams
-    val streamCheckingProgress: StateFlow<Float> = BackgroundSyncManager.streamCheckingProgress
-    val streamCheckingStatus: StateFlow<String?> = BackgroundSyncManager.streamCheckingStatus
+    val isCheckingStreams: StateFlow<Boolean> = syncManager.isCheckingStreams
+    val streamCheckingProgress: StateFlow<Float> = syncManager.streamCheckingProgress
+    val streamCheckingStatus: StateFlow<String?> = syncManager.streamCheckingStatus
 
     private val _filterBrokenChannels = MutableStateFlow(prefs.getBoolean("filter_broken_channels", true))
     val filterBrokenChannels: StateFlow<Boolean> = _filterBrokenChannels.asStateFlow()
@@ -112,13 +148,21 @@ class ChannelViewModel(
     private val _isPublicMode = MutableStateFlow(prefs.getBoolean("is_public_mode", false))
     val isPublicMode: StateFlow<Boolean> = _isPublicMode.asStateFlow()
 
+    private val _lowLatencyMode = MutableStateFlow(prefs.getBoolean("low_latency_mode", true))
+    val lowLatencyMode: StateFlow<Boolean> = _lowLatencyMode.asStateFlow()
+
+    fun setLowLatencyMode(enabled: Boolean) {
+        prefs.edit().putBoolean("low_latency_mode", enabled).apply()
+        _lowLatencyMode.value = enabled
+    }
+
     private val _lastSyncTime = MutableStateFlow(prefs.getLong("last_sync_time", 0L))
     val lastSyncTime: StateFlow<Long> = _lastSyncTime.asStateFlow()
 
     private val _localSyncStatusMessage = MutableStateFlow<String?>(null)
     val syncStatusMessage: StateFlow<String?> = combine(
         _localSyncStatusMessage,
-        BackgroundSyncManager.syncStatusMessage
+        syncManager.syncStatusMessage
     ) { local, background ->
         background ?: local
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
@@ -131,22 +175,15 @@ class ChannelViewModel(
         if (filterBroken) active else all
     }
 
-    // --- Dynamic Channel List based on Category and Search ---
+    // --- Dynamic Channel List based on Category ---
     val filteredChannels: StateFlow<List<ChannelEntity>> = combine(
         _currentChannelsFlow,
         categories,
-        _selectedCategoryId,
-        _searchQuery
-    ) { sourceList, allCategories, catId, query ->
+        _selectedCategoryId
+    ) { sourceList, allCategories, catId ->
         val categoryMap = allCategories.associateBy { it.id }
         sourceList.filter { channel ->
-            val matchesCategory = catId == null || channel.categoryId == catId
-            val categoryName = categoryMap[channel.categoryId]?.name ?: ""
-            val matchesSearch = query.isEmpty() ||
-                    channel.name.contains(query, ignoreCase = true) ||
-                    channel.description.contains(query, ignoreCase = true) ||
-                    categoryName.contains(query, ignoreCase = true)
-            matchesCategory && matchesSearch
+            catId == null || channel.categoryId == catId
         }.sortedWith { ch1, ch2 ->
             val catName1 = categoryMap[ch1.categoryId]?.name ?: ""
             val catName2 = categoryMap[ch2.categoryId]?.name ?: ""
@@ -158,15 +195,18 @@ class ChannelViewModel(
                 else -> ch1.name.compareTo(ch2.name, ignoreCase = true)
             }
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.flowOn(Dispatchers.Default)
+     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val filteredGroupedChannels: StateFlow<List<GroupedChannel>> = filteredChannels
         .map { list -> groupChannels(list) }
+        .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val favoriteGroupedChannels: StateFlow<List<GroupedChannel>> = favoriteChannels
         .map { list -> list.filter { !it.isBroken } }
         .map { list -> groupChannels(list) }
+        .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // --- Recordings State ---
@@ -344,28 +384,60 @@ class ChannelViewModel(
                 // Proceed if timeout occurs
             }
 
-            // Auto sync from secure internal cloud link on launch if enabled, otherwise verify existing channels
-            if (_autoSyncOnLaunch.value) {
-                syncWithCloudGist()
-            } else {
+            // Check if there's an interrupted scan process to resume first
+            val isInterrupted = prefs.getBoolean("is_scanning_interrupted", false)
+            if (isInterrupted) {
+                _localSyncStatusMessage.value = "Resuming interrupted channel scanning..."
                 verifyAllChannels()
+            } else if (_autoSyncOnLaunch.value) {
+                val lastSyncedUrl = prefs.getString("last_synced_m3u_url", "") ?: ""
+                val currentUrl = _cloudGistUrl.value
+                val isUrlChanged = lastSyncedUrl != currentUrl
+                val existingChannels = repository.allChannels.first()
+
+                if (existingChannels.isEmpty() || isUrlChanged) {
+                    syncWithCloudGist(force = true)
+                } else {
+                    // Lazy verification model: do NOT run intensive stream check on startup.
+                    // Verification is deferred until playback or manual user request.
+                    android.util.Log.i("ChannelViewModel", "Startup check bypassed: Lazy model active. Defers to playback/user-action validation.")
+                }
+            } else {
+                // Manual sync/lazy active; do not auto-run full verification on start
+                android.util.Log.i("ChannelViewModel", "Startup check bypassed: Auto-sync disabled.")
+            }
+
+            // Proactive Background Prefetching: Pre-cache top 3 channels for instant startup play
+            viewModelScope.launch {
+                filteredChannels.collect { list ->
+                    if (list.isNotEmpty()) {
+                        list.take(3).forEach { channel ->
+                            launch { com.example.ui.components.VideoPrefetcher.prefetch(application, channel.streamUrl) }
+                        }
+                    }
+                }
             }
         }
     }
 
-    fun syncWithCloudGist() {
-        BackgroundSyncManager.syncWithCloudGist(cloudGistUrl.value) { success ->
+    fun syncWithCloudGist(force: Boolean = false, onComplete: (Boolean) -> Unit = {}) {
+        val currentUrl = cloudGistUrl.value
+        syncManager.syncWithCloudGist(currentUrl, force) { success ->
             if (success) {
                 val currentTime = System.currentTimeMillis()
-                prefs.edit().putLong("last_sync_time", currentTime).apply()
+                prefs.edit()
+                    .putLong("last_sync_time", currentTime)
+                    .putString("last_synced_m3u_url", currentUrl)
+                    .apply()
                 _lastSyncTime.value = currentTime
             }
+            onComplete(success)
         }
     }
 
     fun syncWithM3uText(text: String) {
         if (text.isBlank()) return
-        BackgroundSyncManager.syncWithM3uText(text) { success ->
+        syncManager.syncWithM3uText(text) { success ->
             if (success) {
                 val currentTime = System.currentTimeMillis()
                 prefs.edit().putLong("last_sync_time", currentTime).apply()
@@ -386,6 +458,7 @@ class ChannelViewModel(
 
     fun updateCloudGistSettings(url: String, autoSync: Boolean, publicMode: Boolean) {
         viewModelScope.launch {
+            val oldUrl = _cloudGistUrl.value
             prefs.edit()
                 .putString("cloud_gist_url", url)
                 .putBoolean("auto_sync_on_launch", autoSync)
@@ -396,6 +469,10 @@ class ChannelViewModel(
             _isPublicMode.value = publicMode
             
             _localSyncStatusMessage.value = "Cloud Sync configurations updated."
+            
+            if (oldUrl != url) {
+                syncWithCloudGist(force = true)
+            }
         }
     }
 
@@ -498,72 +575,80 @@ class ChannelViewModel(
             val allChs = repository.allChannels.first()
             val representativeId = groupedChannel.originalChannelIds.firstOrNull()
             val channel = allChs.find { it.id == representativeId }
-            _selectedChannel.value = channel
+            selectChannel(channel)
         }
     }
 
     fun groupChannels(channelList: List<ChannelEntity>): List<GroupedChannel> {
-        val groupedMap = mutableMapOf<String, MutableList<ChannelEntity>>()
-        for (channel in channelList) {
-            val key = ChannelNameNormalizer.sanitizeChannelName(channel.name).lowercase()
-            groupedMap.getOrPut(key) { mutableListOf() }.add(channel)
-        }
-
-        return groupedMap.map { (key, list) ->
-            val rep = list.firstOrNull { !it.isBroken } ?: list.first()
-            
-            val hasStoredSources = list.any { it.playbackSources.isNotEmpty() }
-            val streams = if (hasStoredSources) {
-                val allSources = list.flatMap { it.playbackSources }
-                allSources.mapIndexed { index, src ->
-                    StreamSource(
-                        url = src.url,
-                        subName = src.name.ifBlank { "Source ${index + 1}" },
-                        isBroken = src.isBroken
-                    )
-                }
-            } else {
-                list.mapIndexed { index, ch ->
-                    var subName = ch.name
-                    val repSanitized = ChannelNameNormalizer.sanitizeChannelName(rep.name)
-                    val chSanitized = ChannelNameNormalizer.sanitizeChannelName(ch.name)
-                    
-                    if (repSanitized.equals(chSanitized, ignoreCase = true)) {
-                        subName = ch.name
-                            .replace(repSanitized, "", ignoreCase = true)
-                            .replace(Regex("[\\s\\-_()\\[\\]]+"), " ")
-                            .trim()
-                    }
-                    
-                    if (subName.isBlank()) {
-                        subName = if (list.size > 1) {
-                            "Source ${index + 1}"
-                        } else {
-                            "Main Source"
-                        }
-                    } else {
-                        subName = subName.split(" ").joinToString(" ") { 
-                            it.replaceFirstChar { char -> if (char.isLowerCase()) char.titlecase() else char.toString() } 
-                        }
-                    }
-                    StreamSource(
-                        url = ch.streamUrl,
-                        subName = subName,
-                        isBroken = ch.isBroken
-                    )
-                }
+        val work = {
+            val groupedMap = mutableMapOf<String, MutableList<ChannelEntity>>()
+            for (channel in channelList) {
+                val key = ChannelNameNormalizer.sanitizeChannelName(channel.name).lowercase()
+                groupedMap.getOrPut(key) { mutableListOf() }.add(channel)
             }
 
-            GroupedChannel(
-                name = rep.name,
-                logoUrl = rep.logoUrl,
-                categoryId = rep.categoryId,
-                description = rep.description,
-                isFavorite = list.any { it.isFavorite },
-                isBroken = list.all { it.isBroken },
-                streams = streams,
-                originalChannelIds = list.map { it.id }
-            )
+            groupedMap.map { (key, list) ->
+                val rep = list.firstOrNull { !it.isBroken } ?: list.first()
+                
+                val hasStoredSources = list.any { it.playbackSources.isNotEmpty() }
+                val streams = if (hasStoredSources) {
+                    val allSources = list.flatMap { it.playbackSources }
+                    allSources.mapIndexed { index, src ->
+                        StreamSource(
+                            url = src.url,
+                            subName = src.name.ifBlank { "Source ${index + 1}" },
+                            isBroken = src.isBroken
+                        )
+                    }
+                } else {
+                    list.mapIndexed { index, ch ->
+                        var subName = ch.name
+                        val repSanitized = ChannelNameNormalizer.sanitizeChannelName(rep.name)
+                        val chSanitized = ChannelNameNormalizer.sanitizeChannelName(ch.name)
+                        
+                        if (repSanitized.equals(chSanitized, ignoreCase = true)) {
+                            subName = ch.name
+                                .replace(repSanitized, "", ignoreCase = true)
+                                .replace(Regex("[\\s\\-_()\\[\\]]+"), " ")
+                                .trim()
+                        }
+                        
+                        if (subName.isBlank()) {
+                            subName = if (list.size > 1) {
+                                "Source ${index + 1}"
+                            } else {
+                                "Main Source"
+                            }
+                        } else {
+                            subName = subName.split(" ").joinToString(" ") { 
+                                it.replaceFirstChar { char -> if (char.isLowerCase()) char.titlecase() else char.toString() } 
+                            }
+                        }
+                        StreamSource(
+                            url = ch.streamUrl,
+                            subName = subName,
+                            isBroken = ch.isBroken
+                        )
+                    }
+                }
+
+                GroupedChannel(
+                    name = rep.name,
+                    logoUrl = rep.logoUrl,
+                    categoryId = rep.categoryId,
+                    description = rep.description,
+                    isFavorite = list.any { it.isFavorite },
+                    isBroken = list.all { it.isBroken },
+                    streams = streams,
+                    originalChannelIds = list.map { it.id }
+                )
+            }
+        }
+
+        return if (channelList.size > 200 && android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            kotlinx.coroutines.runBlocking(Dispatchers.Default) { work() }
+        } else {
+            work()
         }
     }
 
@@ -585,11 +670,98 @@ class ChannelViewModel(
     }
 
     fun fetchAndParseM3u(url: String) {
-        BackgroundSyncManager.syncWithCloudGist(url)
+        syncManager.syncWithCloudGist(url)
+    }
+
+    fun selectStreamSource(url: String, subName: String) {
+        _currentStreamUrl.value = url
+        _currentStreamName.value = subName
+        errorCountMap.clear()
     }
 
     fun selectChannel(channel: ChannelEntity?) {
         _selectedChannel.value = channel
+        errorCountMap.clear()
+        if (channel != null) {
+            val attempts = (channelAttemptsMap[channel.id] ?: 0) + 1
+            channelAttemptsMap[channel.id] = attempts
+            android.util.Log.i("LiveTvTelemetry", "Playback attempt registered for channel ${channel.id}. Total attempts: $attempts")
+            
+            _currentStreamUrl.value = channel.streamUrl
+            val groups = groupChannels(channels.value)
+            val group = groups.find { it.originalChannelIds.contains(channel.id) }
+            val stream = group?.streams?.find { it.url == channel.streamUrl }
+            _currentStreamName.value = stream?.subName ?: "Main Source"
+
+            // Update recently watched list
+            val currentNames = _recentlyWatchedNames.value.toMutableList()
+            currentNames.remove(channel.name)
+            currentNames.add(0, channel.name)
+            val updatedNames = currentNames.take(10)
+            _recentlyWatchedNames.value = updatedNames
+            prefs.edit().putString("recently_watched_channels", updatedNames.joinToString("||")).apply()
+
+            viewModelScope.launch {
+                val list = filteredChannels.value
+                val currentIndex = list.indexOfFirst { it.id == channel.id }
+                if (currentIndex != -1 && list.size > 1) {
+                    val nextIndex = (currentIndex + 1) % list.size
+                    val prevIndex = (currentIndex - 1 + list.size) % list.size
+                    
+                    val nextChannel = list[nextIndex]
+                    val prevChannel = list[prevIndex]
+                    
+                    // Pre-cache adjacent streams in parallel/background for instant channel switching (zapping)
+                    launch { com.example.ui.components.VideoPrefetcher.prefetch(getApplication(), nextChannel.streamUrl) }
+                    launch { com.example.ui.components.VideoPrefetcher.prefetch(getApplication(), prevChannel.streamUrl) }
+                }
+            }
+        } else {
+            _currentStreamUrl.value = null
+            _currentStreamName.value = null
+        }
+    }
+
+    fun handlePlaybackError(channelId: Int, failedUrl: String) {
+        viewModelScope.launch {
+            val count = (errorCountMap[failedUrl] ?: 0) + 1
+            errorCountMap[failedUrl] = count
+            
+            // Increment telemetry failures
+            val failures = (channelFailuresMap[channelId] ?: 0) + 1
+            channelFailuresMap[channelId] = failures
+            val errorRate = getChannelErrorRate(channelId)
+            android.util.Log.i("LiveTvTelemetry", "Playback failure registered for channel $channelId. Failures: $failures, Error Rate: ${"%.2f".format(errorRate * 100)}% [URL: $failedUrl]")
+            
+            android.util.Log.d("ChannelViewModel", "Playback error on $failedUrl, consecutive count: $count")
+
+            if (count >= 3) {
+                val allChs = channels.value
+                val groups = groupChannels(allChs)
+                val currentGroup = groups.find { it.originalChannelIds.contains(channelId) }
+                
+                if (currentGroup != null && currentGroup.streams.size > 1) {
+                    // Try alternative streams in the same channel group first!
+                    val availableStreams = currentGroup.streams.filter { !it.isBroken && it.url != failedUrl }
+                    val nextStream = availableStreams.firstOrNull() ?: currentGroup.streams.firstOrNull { it.url != failedUrl }
+                    
+                    if (nextStream != null) {
+                        _localSyncStatusMessage.value = "Source failed. Swapping to alternative source: ${nextStream.subName}..."
+                        _currentStreamUrl.value = nextStream.url
+                        _currentStreamName.value = nextStream.subName
+                        delay(4000)
+                        if (_localSyncStatusMessage.value?.startsWith("Source failed.") == true) {
+                            _localSyncStatusMessage.value = null
+                        }
+                        return@launch
+                    }
+                }
+
+                // If no alternative stream is available, or all of them failed, then mark as broken and skip the channel
+                _localSyncStatusMessage.value = "All sources offline. Skipping channel..."
+                markChannelAsBrokenAndSkip(channelId)
+            }
+        }
     }
 
     fun updateFilterBrokenSetting(filterBroken: Boolean) {
@@ -603,7 +775,45 @@ class ChannelViewModel(
     }
 
     fun verifyAllChannels() {
-        BackgroundSyncManager.verifyAllChannels()
+        syncManager.verifyAllChannels()
+    }
+
+    private val verificationCache = mutableMapOf<String, Pair<Boolean, Long>>() // URL -> Pair(isWorking, timestamp)
+
+    fun verifyChannelLazy(channel: ChannelEntity, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cached = verificationCache[channel.streamUrl]
+            val now = System.currentTimeMillis()
+            if (cached != null && (now - cached.second < 30 * 60 * 1000L)) { // 30 minutes TTL
+                withContext(Dispatchers.Main) { onResult(cached.first) }
+                return@launch
+            }
+            
+            // Also check if database lastChecked is recent (within 30 minutes)
+            if (now - channel.lastChecked < 30 * 60 * 1000L) { // 30 minutes TTL
+                val isWorking = !channel.isBroken
+                verificationCache[channel.streamUrl] = Pair(isWorking, now)
+                withContext(Dispatchers.Main) { onResult(isWorking) }
+                return@launch
+            }
+            
+            // Run verification check
+            val working = syncManager.checkStreamUrl(channel.streamUrl)
+            verificationCache[channel.streamUrl] = Pair(working, now)
+            repository.updateChannelBrokenStatus(channel.id, !working, now)
+            withContext(Dispatchers.Main) { onResult(working) }
+        }
+    }
+
+    fun setUnmeteredSyncOnly(enabled: Boolean) {
+        prefs.edit().putBoolean("unmetered_sync_only", enabled).apply()
+        // Reschedule WorkManager with the updated network and battery constraints
+        ChannelValidationWorker.schedulePeriodicWork(getApplication(), forceReplace = true)
+        _localSyncStatusMessage.value = if (enabled) "Background sync will only run on unmetered Wi-Fi." else "Background sync enabled on any network connection."
+    }
+
+    fun getUnmeteredSyncOnly(): Boolean {
+        return prefs.getBoolean("unmetered_sync_only", false)
     }
 
     fun markChannelAsBrokenAndSkip(channelId: Int) {
@@ -637,11 +847,11 @@ class ChannelViewModel(
 class ChannelViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(ChannelViewModel::class.java)) {
-            val database = AppDatabase.getDatabase(application)
-            val repository = LiveTvRepository(database.liveTvDao())
-            BackgroundSyncManager.initialize(repository)
+            val app = application as com.example.LiveTvApplication
+            val repository = app.repository
+            val syncManager = app.syncManager
             @Suppress("UNCHECKED_CAST")
-            return ChannelViewModel(application, repository) as T
+            return ChannelViewModel(application, repository, syncManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

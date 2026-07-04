@@ -70,13 +70,44 @@ interface LiveTvDao {
     @Query("UPDATE channels SET isBroken = :isBroken, lastChecked = :lastChecked WHERE id IN (:channelIds)")
     suspend fun updateChannelsBrokenStatusQuery(channelIds: List<Int>, isBroken: Boolean, lastChecked: Long)
 
+    @Query("UPDATE channels SET channelHealth = :health WHERE id IN (:channelIds)")
+    suspend fun updateChannelsHealthQuery(channelIds: List<Int>, health: String)
+
     @Transaction
     suspend fun updateChannelsBrokenStatuses(brokenIds: List<Int>, workingIds: List<Int>, lastChecked: Long) {
         if (brokenIds.isNotEmpty()) {
             updateChannelsBrokenStatusQuery(brokenIds, true, lastChecked)
+            updateChannelsHealthQuery(brokenIds, "Offline")
         }
         if (workingIds.isNotEmpty()) {
             updateChannelsBrokenStatusQuery(workingIds, false, lastChecked)
+            updateChannelsHealthQuery(workingIds, "Excellent")
+        }
+    }
+
+    @Transaction
+    suspend fun clearAndInsertUnifiedChannels(
+        categories: List<CategoryEntity>,
+        channels: List<ChannelEntity>
+    ) {
+        deleteAllChannels()
+        deleteAllCategories()
+
+        // Insert categories and capture their auto-generated IDs
+        val categoryIdMap = mutableMapOf<String, Int>()
+        for (cat in categories) {
+            val newId = insertCategory(cat)
+            categoryIdMap[cat.name] = newId.toInt()
+        }
+
+        // Map channels to their new local category IDs
+        val mappedChannels = channels.map { ch ->
+            val resolvedCatId = categoryIdMap[ch.category] ?: ch.categoryId
+            ch.copy(categoryId = resolvedCatId)
+        }
+
+        if (mappedChannels.isNotEmpty()) {
+            insertChannels(mappedChannels)
         }
     }
 

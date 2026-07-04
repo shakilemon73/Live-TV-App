@@ -1,8 +1,12 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
+import android.widget.Toast
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import java.io.InputStreamReader
 import java.io.BufferedReader
@@ -47,7 +51,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.focusable
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import com.example.data.CategoryEntity
@@ -56,6 +66,7 @@ import com.example.data.GroupedChannel
 import com.example.data.StreamSource
 import com.example.data.RecordingEntity
 import com.example.ui.ChannelViewModel
+import kotlinx.coroutines.Dispatchers
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,12 +84,35 @@ fun HomeScreen(
     val isPublicMode by viewModel.isPublicMode.collectAsStateWithLifecycle()
     val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
     val isCheckingStreams by viewModel.isCheckingStreams.collectAsStateWithLifecycle()
+    val recentlyWatched by viewModel.recentlyWatched.collectAsStateWithLifecycle()
 
-    var currentTab by remember { mutableStateOf(0) } // 0 = Channels, 1 = Categories, 2 = Settings
+    val autoSyncOnLaunch by viewModel.autoSyncOnLaunch.collectAsStateWithLifecycle()
+    val lastSyncTime by viewModel.lastSyncTime.collectAsStateWithLifecycle()
+    val syncStatusMessage by viewModel.syncStatusMessage.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val lowLatencyMode by viewModel.lowLatencyMode.collectAsStateWithLifecycle()
+    val cloudGistUrl by viewModel.cloudGistUrl.collectAsStateWithLifecycle()
+
+    val streamCheckingProgress by viewModel.streamCheckingProgress.collectAsStateWithLifecycle()
+    val streamCheckingStatus by viewModel.streamCheckingStatus.collectAsStateWithLifecycle()
+    val filterBrokenChannels by viewModel.filterBrokenChannels.collectAsStateWithLifecycle()
+
+    var currentTab by remember { mutableStateOf(0) } // 0 = Home, 1 = Categories, 2 = Favorites, 3 = Search
     var showFavoritesOnly by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var favoritesSubTab by remember { mutableStateOf(0) } // 0 = Starred Feeds, 1 = Recorded Shows
     var titleTapCount by remember { mutableStateOf(0) }
     var showAdminOverride by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+
+    BackHandler(enabled = showSettings || currentTab != 0) {
+        if (showSettings) {
+            showSettings = false
+        } else {
+            currentTab = 0
+            viewModel.setSearchQuery("")
+        }
+    }
 
     val lazyGridState = rememberLazyGridState()
     val isScrolling by remember {
@@ -93,16 +127,22 @@ fun HomeScreen(
     val hideEmptyCategories by remember { mutableStateOf(true) } // Hide empty categories by default for a pristine feed experience
 
     val allChannelsRaw by viewModel.channels.collectAsStateWithLifecycle()
-    val filterBrokenChannels by viewModel.filterBrokenChannels.collectAsStateWithLifecycle()
     
     // Highly efficient O(N) category counts map with O(1) lookup
     val categoryCounts = remember(allChannelsRaw, filterBrokenChannels) {
-        val listToCount = if (filterBrokenChannels) {
-            allChannelsRaw.filter { !it.isBroken }
-        } else {
-            allChannelsRaw
+        val work = {
+            val listToCount = if (filterBrokenChannels) {
+                allChannelsRaw.filter { !it.isBroken }
+            } else {
+                allChannelsRaw
+            }
+            listToCount.groupBy { it.categoryId }.mapValues { it.value.size }
         }
-        listToCount.groupBy { it.categoryId }.mapValues { it.value.size }
+        if (allChannelsRaw.size > 200) {
+            kotlinx.coroutines.runBlocking(Dispatchers.Default) { work() }
+        } else {
+            work()
+        }
     }
     
     val totalActiveChannelsCount = remember(categoryCounts) { categoryCounts.values.sum() }
@@ -131,27 +171,34 @@ fun HomeScreen(
     }
 
     val processedCategories = remember(categories, categoryCounts, categorySearchQuery, categorySortMode, hideEmptyCategories) {
-        categories
-            .filter { category ->
-                val count = categoryCounts[category.id] ?: 0
-                val matchesSearch = categorySearchQuery.isEmpty() || category.name.contains(categorySearchQuery, ignoreCase = true)
-                val matchesEmpty = !hideEmptyCategories || count > 0
-                matchesSearch && matchesEmpty
-            }
-            .sortedWith { c1, c2 ->
-                val count1 = categoryCounts[c1.id] ?: 0
-                val count2 = categoryCounts[c2.id] ?: 0
-                when (categorySortMode) {
-                    0 -> {
-                        val countCompare = count2.compareTo(count1)
-                        if (countCompare != 0) countCompare else c1.name.compareTo(c2.name, ignoreCase = true)
-                    }
-                    1 -> {
-                        c1.name.compareTo(c2.name, ignoreCase = true)
-                    }
-                    else -> 0
+        val work = {
+            categories
+                .filter { category ->
+                    val count = categoryCounts[category.id] ?: 0
+                    val matchesSearch = categorySearchQuery.isEmpty() || category.name.contains(categorySearchQuery, ignoreCase = true)
+                    val matchesEmpty = !hideEmptyCategories || count > 0
+                    matchesSearch && matchesEmpty
                 }
-            }
+                .sortedWith { c1, c2 ->
+                    val count1 = categoryCounts[c1.id] ?: 0
+                    val count2 = categoryCounts[c2.id] ?: 0
+                    when (categorySortMode) {
+                        0 -> {
+                            val countCompare = count2.compareTo(count1)
+                            if (countCompare != 0) countCompare else c1.name.compareTo(c2.name, ignoreCase = true)
+                        }
+                        1 -> {
+                            c1.name.compareTo(c2.name, ignoreCase = true)
+                        }
+                        else -> 0
+                    }
+                }
+        }
+        if (categories.size > 200) {
+            kotlinx.coroutines.runBlocking(Dispatchers.Default) { work() }
+        } else {
+            work()
+        }
     }
 
     // Stable, remembered callback handlers to prevent layout recomposition during scroll
@@ -188,117 +235,160 @@ fun HomeScreen(
                 modifier = Modifier
                     .background(darkBg)
                     .statusBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
-                if (currentTab == 0) {
-                    // Header Row
+                if (showSettings) {
+                    // Settings Top Bar with Back button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { showSettings = false },
+                                modifier = Modifier
+                                    .padding(end = 8.dp)
+                                    .size(40.dp)
+                                    .background(Color.White.copy(alpha = 0.04f), CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = Color.White
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "Portal Settings",
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    letterSpacing = (-0.5).sp
+                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(accentColor, RoundedCornerShape(50))
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "MANAGE SOURCES & PREFERENCES",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = accentColor,
+                                        letterSpacing = 1.5.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else if (currentTab == 0) {
+                    val context = LocalContext.current
+                    val currentHour = remember {
+                        try {
+                            java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                        } catch (e: Exception) {
+                            12
+                        }
+                    }
+                    val greetingTitle = remember(currentHour) {
+                        when (currentHour) {
+                            in 0..4 -> "Home"
+                            in 5..11 -> "Morning Broadcasts"
+                            in 12..16 -> "Afternoon Stream Hub"
+                            in 17..21 -> "Evening Prime Time"
+                            else -> "Late Night Cinema"
+                        }
+                    }
+                    val greetingSubtitle = remember(currentHour) {
+                        when (currentHour) {
+                            in 0..4 -> "Curated nocturnal channels broadcasting live"
+                            in 5..11 -> "Start your day with global live channels"
+                            in 12..16 -> "Keep pace with active live streams"
+                            in 17..21 -> "Your front row seat to premium live feeds"
+                            else -> "Unwind with late night television networks"
+                        }
+                    }
+
+                    // Luxury Header Row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(
-                            modifier = Modifier.clickable(
-                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                                indication = null
-                            ) {
-                                titleTapCount++
-                                if (titleTapCount >= 5) {
-                                    showAdminOverride = true
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(
+                                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    titleTapCount++
+                                    if (titleTapCount >= 5) {
+                                        showAdminOverride = true
+                                    }
                                 }
-                            }
                         ) {
                             Text(
-                                text = "Live Stream Hub",
-                                fontSize = 28.sp,
-                                fontWeight = FontWeight.ExtraBold,
+                                text = greetingTitle,
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Black,
                                 color = Color.White,
                                 letterSpacing = (-0.5).sp
                             )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Pulsating Live broadcast dot
-                                PulsatingCardIndicator()
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "ACTIVE BROADCASTS",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = accentColor,
-                                    letterSpacing = 1.5.sp
-                                )
-                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = greetingSubtitle,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.White.copy(alpha = 0.5f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
+
+                        Spacer(modifier = Modifier.width(16.dp))
 
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            // Refresh & Verify Channels Button
-                            IconButton(
-                                onClick = { viewModel.verifyAllChannels() },
+                            // High-End Micro Verify Pulse
+                            Box(
                                 modifier = Modifier
-                                    .size(48.dp)
-                                    .testTag("refresh_verify_header_button")
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.04f))
+                                    .clickable {
+                                        viewModel.verifyAllChannels()
+                                        Toast.makeText(context, "Scanning stream connectivity status...", Toast.LENGTH_SHORT).show()
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
                                 if (isCheckingStreams) {
                                     CircularProgressIndicator(
                                         color = accentColor,
-                                        modifier = Modifier.size(24.dp),
-                                        strokeWidth = 2.5.dp
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.0.dp
                                     )
                                 } else {
                                     Icon(
                                         imageVector = Icons.Default.Refresh,
                                         contentDescription = "Refresh & Verify Channels",
-                                        tint = Color.White
+                                        tint = Color.White.copy(alpha = 0.8f),
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
                             }
 
-                            // Dynamic Network connection status icon in the top header bar
-                            NetworkConnectionIndicator(isOnline = isOnline)
+                            ProfileAvatarWithStatus(
+                                isOnline = isOnline,
+                                onClick = { showSettings = true }
+                            )
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Modern glassmorphic search input
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { viewModel.setSearchQuery(it) },
-                        placeholder = { Text("Find channels, broadcasts...", color = Color.Gray) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = "Search",
-                                tint = Color.Gray
-                            )
-                        },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Clear",
-                                        tint = Color.Gray
-                                    )
-                                }
-                            }
-                        },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = accentColor,
-                            unfocusedBorderColor = Color.White.copy(alpha = 0.08f),
-                            focusedContainerColor = cardBg,
-                            unfocusedContainerColor = cardBg
-                        ),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("search_bar")
-                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -311,24 +401,24 @@ fun HomeScreen(
                         FilterChip(
                             selected = showFavoritesOnly,
                             onClick = { showFavoritesOnly = !showFavoritesOnly },
-                            label = { Text("Favorites (${favorites.size})", fontWeight = FontWeight.Bold) },
+                            label = { Text("Starred (${favorites.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
                             leadingIcon = {
                                 Icon(
                                     imageVector = if (showFavoritesOnly) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                                     contentDescription = "Favorites",
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
                             },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFFFF8A80),
-                                selectedLabelColor = Color.Black,
-                                selectedLeadingIconColor = Color.Black,
+                                selectedContainerColor = Color(0xFFFF5252),
+                                selectedLabelColor = Color.White,
+                                selectedLeadingIconColor = Color.White,
                                 containerColor = cardBg,
                                 labelColor = Color(0xFFCAC4D0),
                                 iconColor = Color(0xFFCAC4D0)
                             ),
                             border = null,
-                            shape = RoundedCornerShape(14.dp)
+                            shape = CircleShape
                         )
 
                         Spacer(modifier = Modifier.width(8.dp))
@@ -349,15 +439,15 @@ fun HomeScreen(
                                     },
                                     label = {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("All")
+                                            Text("All Streams", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Box(
                                                 modifier = Modifier
                                                     .background(
-                                                        if (isAllSelected) onPurpleColor.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                                                        if (isAllSelected) onPurpleColor.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f),
                                                         CircleShape
                                                     )
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    .padding(horizontal = 7.dp, vertical = 2.dp)
                                             ) {
                                                 Text(
                                                     text = "$totalActiveChannelsCount",
@@ -384,7 +474,7 @@ fun HomeScreen(
                                         iconColor = Color(0xFFCAC4D0)
                                     ),
                                     border = null,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = CircleShape,
                                     modifier = Modifier.testTag("category_chip_all")
                                 )
                             }
@@ -400,15 +490,15 @@ fun HomeScreen(
                                     },
                                     label = {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(category.name)
+                                            Text(category.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Box(
                                                 modifier = Modifier
                                                     .background(
-                                                        if (isSelected) onPurpleColor.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                                                        if (isSelected) onPurpleColor.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f),
                                                         CircleShape
                                                     )
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    .padding(horizontal = 7.dp, vertical = 2.dp)
                                             ) {
                                                 Text(
                                                     text = "$count",
@@ -435,12 +525,14 @@ fun HomeScreen(
                                         iconColor = Color(0xFFCAC4D0)
                                     ),
                                     border = null,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = CircleShape,
                                     modifier = Modifier.testTag("category_chip_${category.id}")
                                 )
                             }
                         }
                     }
+                    
+
                 } else if (currentTab == 1) {
                     // Explore Categories Top Bar
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -473,7 +565,10 @@ fun HomeScreen(
                                     )
                                 }
                             }
-                            NetworkConnectionIndicator(isOnline = isOnline)
+                            ProfileAvatarWithStatus(
+                                isOnline = isOnline,
+                                onClick = { showSettings = true }
+                            )
                         }
                         
                         Spacer(modifier = Modifier.height(12.dp))
@@ -558,7 +653,7 @@ fun HomeScreen(
                         }
                     }
                 } else if (currentTab == 2) {
-                    // Offline Library Top Bar
+                    // Favorites Top Bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -566,7 +661,7 @@ fun HomeScreen(
                     ) {
                         Column {
                             Text(
-                                text = "Offline Library",
+                                text = "My Library",
                                 fontSize = 28.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = Color.White,
@@ -580,7 +675,7 @@ fun HomeScreen(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "YOUR RECORDED SHOWS",
+                                    text = "FAVORITES & RECORDINGS",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = accentColor,
@@ -588,10 +683,13 @@ fun HomeScreen(
                                 )
                             }
                         }
-                        NetworkConnectionIndicator(isOnline = isOnline)
+                        ProfileAvatarWithStatus(
+                            isOnline = isOnline,
+                            onClick = { showSettings = true }
+                        )
                     }
                 } else {
-                    // Settings Top Bar
+                    // Search Top Bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -599,7 +697,7 @@ fun HomeScreen(
                     ) {
                         Column {
                             Text(
-                                text = "Portal Settings",
+                                text = "Live Search",
                                 fontSize = 28.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = Color.White,
@@ -613,7 +711,7 @@ fun HomeScreen(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "MANAGE SOURCES & PREFERENCES",
+                                    text = "EXPLORE 1,000+ STREAMS INSTANTLY",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = accentColor,
@@ -621,7 +719,10 @@ fun HomeScreen(
                                 )
                             }
                         }
-                        NetworkConnectionIndicator(isOnline = isOnline)
+                        ProfileAvatarWithStatus(
+                            isOnline = isOnline,
+                            onClick = { showSettings = true }
+                        )
                     }
                 }
             }
@@ -629,7 +730,7 @@ fun HomeScreen(
         bottomBar = {
             Column(
                 modifier = Modifier
-                    .background(darkBg)
+                    .background(Color.Transparent)
                     .navigationBarsPadding()
             ) {
                 if (!isOnline) {
@@ -658,65 +759,88 @@ fun HomeScreen(
                     }
                 }
 
-                NavigationBar(
-                    containerColor = cardBg,
-                    tonalElevation = 8.dp,
+                Box(
                     modifier = Modifier
-                        .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    NavigationBarItem(
-                        selected = currentTab == 0,
-                        onClick = { currentTab = 0 },
-                        icon = { Icon(imageVector = Icons.Default.PlayArrow, contentDescription = "Channels") },
-                        label = { Text("Channels", fontWeight = if (currentTab == 0) FontWeight.Bold else FontWeight.Normal) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = onPurpleColor,
-                            selectedTextColor = accentColor,
-                            indicatorColor = accentColor,
-                            unselectedIconColor = Color.Gray,
-                            unselectedTextColor = Color.Gray
-                        )
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == 1,
-                        onClick = { currentTab = 1 },
-                        icon = { Icon(imageVector = Icons.Default.Star, contentDescription = "Categories") },
-                        label = { Text("Genres", fontWeight = if (currentTab == 1) FontWeight.Bold else FontWeight.Normal) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = onPurpleColor,
-                            selectedTextColor = accentColor,
-                            indicatorColor = accentColor,
-                            unselectedIconColor = Color.Gray,
-                            unselectedTextColor = Color.Gray
-                        )
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == 2,
-                        onClick = { currentTab = 2 },
-                        icon = { Icon(imageVector = Icons.Default.List, contentDescription = "Recordings") },
-                        label = { Text("Offline", fontWeight = if (currentTab == 2) FontWeight.Bold else FontWeight.Normal) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = onPurpleColor,
-                            selectedTextColor = accentColor,
-                            indicatorColor = accentColor,
-                            unselectedIconColor = Color.Gray,
-                            unselectedTextColor = Color.Gray
-                        )
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == 3,
-                        onClick = { currentTab = 3 },
-                        icon = { Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings") },
-                        label = { Text("Settings", fontWeight = if (currentTab == 3) FontWeight.Bold else FontWeight.Normal) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = onPurpleColor,
-                            selectedTextColor = accentColor,
-                            indicatorColor = accentColor,
-                            unselectedIconColor = Color.Gray,
-                            unselectedTextColor = Color.Gray
-                        )
-                    )
+                    Surface(
+                        color = Color(0xFF141218).copy(alpha = 0.92f), // Glassy ultra-dark premium background
+                        shape = RoundedCornerShape(28.dp),
+                        border = BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.12f),
+                                    Color.White.copy(alpha = 0.04f)
+                                )
+                            )
+                        ),
+                        tonalElevation = 12.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(72.dp)
+                                .padding(horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceAround,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FloatingBottomBarItem(
+                                selected = !showSettings && currentTab == 0,
+                                onClick = { 
+                                    showSettings = false
+                                    currentTab = 0 
+                                    viewModel.setSearchQuery("")
+                                },
+                                icon = Icons.Default.Home,
+                                selectedIcon = Icons.Default.Home,
+                                label = "Home",
+                                accentColor = accentColor,
+                                modifier = Modifier.testTag("nav_home")
+                            )
+                            FloatingBottomBarItem(
+                                selected = !showSettings && currentTab == 1,
+                                onClick = { 
+                                    showSettings = false
+                                    currentTab = 1 
+                                    viewModel.setSearchQuery("")
+                                },
+                                icon = Icons.Default.Category,
+                                selectedIcon = Icons.Default.Category,
+                                label = "Categories",
+                                accentColor = accentColor,
+                                modifier = Modifier.testTag("nav_categories")
+                            )
+                            FloatingBottomBarItem(
+                                selected = !showSettings && currentTab == 2,
+                                onClick = { 
+                                    showSettings = false
+                                    currentTab = 2 
+                                    viewModel.setSearchQuery("")
+                                },
+                                icon = Icons.Default.FavoriteBorder,
+                                selectedIcon = Icons.Default.Favorite,
+                                label = "Favorites",
+                                accentColor = accentColor,
+                                modifier = Modifier.testTag("nav_favorites")
+                            )
+                            FloatingBottomBarItem(
+                                selected = !showSettings && currentTab == 3,
+                                onClick = { 
+                                    showSettings = false
+                                    currentTab = 3 
+                                },
+                                icon = Icons.Default.Search,
+                                selectedIcon = Icons.Default.Search,
+                                label = "Search",
+                                accentColor = accentColor,
+                                modifier = Modifier.testTag("nav_search")
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -725,11 +849,28 @@ fun HomeScreen(
     ) { innerPadding ->
         val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
 
-        if (currentTab == 0) {
+        if (showSettings) {
+            SettingsOverlayContent(
+                viewModel = viewModel,
+                innerPadding = innerPadding,
+                cardBg = cardBg,
+                accentColor = accentColor,
+                onPurpleColor = onPurpleColor,
+                isCheckingStreams = isCheckingStreams,
+                streamCheckingProgress = streamCheckingProgress,
+                streamCheckingStatus = streamCheckingStatus,
+                filterBrokenChannels = filterBrokenChannels,
+                autoSyncOnLaunch = autoSyncOnLaunch,
+                lastSyncTime = lastSyncTime,
+                syncStatusMessage = syncStatusMessage,
+                isLoading = isLoading,
+                lowLatencyMode = lowLatencyMode,
+                cloudGistUrl = cloudGistUrl,
+                isPublicMode = isPublicMode
+            )
+        } else if (currentTab == 0) {
             val listToDisplay = if (showFavoritesOnly) {
-                favorites.filter { channel ->
-                    searchQuery.isEmpty() || channel.name.contains(searchQuery, ignoreCase = true)
-                }
+                favorites
             } else {
                 channels
             }
@@ -754,7 +895,7 @@ fun HomeScreen(
                     )
 
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
+                        columns = GridCells.Adaptive(minSize = 165.dp),
                         contentPadding = PaddingValues(
                             start = 16.dp,
                             end = 16.dp,
@@ -790,14 +931,26 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.height(20.dp))
                             Text(
-                                text = if (showFavoritesOnly) "No Saved Favorites" else "No Broadcasts Found",
+                                text = if (showFavoritesOnly) {
+                                    "No Saved Favorites"
+                                } else if (searchQuery.isNotEmpty()) {
+                                    "No Search Results"
+                                } else {
+                                    "No Broadcasts Found"
+                                },
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = if (showFavoritesOnly) "Click the heart button on live feeds to collect your favorite channels here." else "We couldn't find any channels matching this query. Please register new feeds in settings.",
+                                text = if (showFavoritesOnly) {
+                                    "Click the heart button on live feeds to collect your favorite channels here."
+                                } else if (searchQuery.isNotEmpty()) {
+                                    "We couldn't find any channels matching \"$searchQuery\". Try checking the spelling or typing a different keyword."
+                                } else {
+                                    "We couldn't find any channels matching this query. Please register new feeds in settings."
+                                },
                                 fontSize = 13.sp,
                                 color = Color.Gray,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -812,7 +965,7 @@ fun HomeScreen(
 
                     LazyVerticalGrid(
                         state = lazyGridState,
-                        columns = GridCells.Fixed(2),
+                        columns = GridCells.Adaptive(minSize = 165.dp),
                         contentPadding = PaddingValues(
                             start = 16.dp,
                             end = 16.dp,
@@ -823,6 +976,106 @@ fun HomeScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
+                        // RECENTLY WATCHED SECTION
+                        if (recentlyWatched.isNotEmpty() && searchQuery.isEmpty() && !showFavoritesOnly) {
+                            item(
+                                span = { GridItemSpan(maxLineSpan) },
+                                key = "recently_watched_row_item",
+                                contentType = "recently_watched"
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 12.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "Recently Watched",
+                                            tint = accentColor,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "RECENTLY WATCHED",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color.White,
+                                            letterSpacing = 1.sp
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        contentPadding = PaddingValues(vertical = 4.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        items(
+                                            items = recentlyWatched,
+                                            key = { "recent_${it.name}" },
+                                            contentType = { "recently_watched_item" }
+                                        ) { groupedChannel ->
+                                            Card(
+                                                shape = RoundedCornerShape(16.dp),
+                                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                                                colors = CardDefaults.cardColors(
+                                                    containerColor = cardBg
+                                                ),
+                                                modifier = Modifier
+                                                    .width(140.dp)
+                                                    .clickable {
+                                                        onCardClick(groupedChannel)
+                                                    }
+                                                    .testTag("recent_channel_${groupedChannel.name}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .padding(8.dp)
+                                                        .fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    SubcomposeAsyncImage(
+                                                        model = groupedChannel.logoUrl,
+                                                        contentDescription = groupedChannel.name,
+                                                        contentScale = ContentScale.Crop,
+                                                        modifier = Modifier
+                                                            .size(28.dp)
+                                                            .clip(RoundedCornerShape(6.dp))
+                                                            .background(Color.White.copy(alpha = 0.1f)),
+                                                        loading = {
+                                                            ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
+                                                        }
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Column {
+                                                        Text(
+                                                            text = groupedChannel.name,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = Color.White,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        Text(
+                                                            text = "WATCH AGAIN",
+                                                            fontSize = 8.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = accentColor
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                                }
+                            }
+                        }
+
                         // FEATURED BANNER ROW (Spans both columns)
                         if (featuredChannel != null && searchQuery.isEmpty() && !showFavoritesOnly) {
                             item(
@@ -920,7 +1173,7 @@ fun HomeScreen(
                 )
 
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
+                    columns = GridCells.Adaptive(minSize = 160.dp),
                     contentPadding = PaddingValues(
                         start = 16.dp,
                         end = 16.dp,
@@ -959,7 +1212,7 @@ fun HomeScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = if (categorySearchQuery.isNotEmpty()) "Try searching for a different keyword or category name." else "Head to Settings to synchronize categories or add channels in the Admin panel.",
+                            text = if (categorySearchQuery.isNotEmpty()) "Try searching for a different keyword or category name." else "Head to Settings to synchronize categories or update your channel feed.",
                             fontSize = 13.sp,
                             color = Color.Gray,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -968,7 +1221,7 @@ fun HomeScreen(
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
+                    columns = GridCells.Adaptive(minSize = 160.dp),
                     contentPadding = PaddingValues(
                         start = 16.dp,
                         end = 16.dp,
@@ -981,18 +1234,40 @@ fun HomeScreen(
                 ) {
                     items(items = processedCategories, key = { it.id }, contentType = { "category" }) { category ->
                         val count = categoryCounts[category.id] ?: 0
+                        val interactionSource = remember { MutableInteractionSource() }
+                        val isFocused by interactionSource.collectIsFocusedAsState()
+                        val isHovered by interactionSource.collectIsHoveredAsState()
+                        val isPressed = isFocused || isHovered
+                        
+                        val categoryScale by animateFloatAsState(
+                            targetValue = if (isPressed) 1.05f else 1.00f,
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                            label = "categoryCardScale"
+                        )
+                        val categoryBorderColor by animateColorAsState(
+                            targetValue = if (isPressed) Color.White else Color.White.copy(alpha = 0.08f),
+                            animationSpec = tween(durationMillis = 150),
+                            label = "categoryCardBorder"
+                        )
                         
                         Card(
                             shape = RoundedCornerShape(24.dp),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                            border = BorderStroke(1.dp, categoryBorderColor),
+                            colors = CardDefaults.cardColors(containerColor = cardBg),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(140.dp)
-                                .clickable {
+                                .graphicsLayer(scaleX = categoryScale, scaleY = categoryScale)
+                                .clickable(
+                                    interactionSource = interactionSource,
+                                    indication = androidx.compose.foundation.LocalIndication.current
+                                ) {
                                     viewModel.selectCategory(category.id)
                                     showFavoritesOnly = false
                                     currentTab = 0
+                                    viewModel.setSearchQuery("")
                                 }
+                                .focusable(interactionSource = interactionSource)
                                 .testTag("category_card_${category.id}")
                         ) {
                             Box(
@@ -1063,281 +1338,377 @@ fun HomeScreen(
                 }
             }
         } else if (currentTab == 2) {
-            OfflineRecordingsScreen(
-                viewModel = viewModel,
-                innerPadding = innerPadding,
-                onCardClick = onRecordingCardClick,
-                cardBg = cardBg,
-                accentColor = accentColor
-            )
-        } else {
-            // Tab 3: Settings View
-            val autoSyncOnLaunch by viewModel.autoSyncOnLaunch.collectAsStateWithLifecycle()
-            val lastSyncTime by viewModel.lastSyncTime.collectAsStateWithLifecycle()
-            val syncStatusMessage by viewModel.syncStatusMessage.collectAsStateWithLifecycle()
-            val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
-
-            val streamCheckingProgress by viewModel.streamCheckingProgress.collectAsStateWithLifecycle()
-            val streamCheckingStatus by viewModel.streamCheckingStatus.collectAsStateWithLifecycle()
-            val filterBrokenChannels by viewModel.filterBrokenChannels.collectAsStateWithLifecycle()
-
-            var localAutoSync by remember(autoSyncOnLaunch) { mutableStateOf(autoSyncOnLaunch) }
-
-            val scrollState = rememberScrollState()
-
+            // Tab 2: Favorites Screen (Starred Feeds + Offline recorded shows!)
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(scrollState),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(top = innerPadding.calculateTopPadding())
             ) {
-                // Section 1: Secure Background Database Synchronization
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = cardBg),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-                    modifier = Modifier.fillMaxWidth()
+                // Secondary horizontal sliding subtabs for Favorites
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(imageVector = Icons.Default.Refresh, contentDescription = "Cloud Source", tint = accentColor, modifier = Modifier.size(24.dp))
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text("Channel Database Synchronization", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Keep your TV streams up-to-date automatically. Feeds are securely cached and synchronized in the background.", fontSize = 12.sp, color = Color.Gray)
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Auto Update on Launch", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                Text("Automatically synchronize the stream list on application startup", fontSize = 11.sp, color = Color.Gray)
-                            }
-                            Switch(
-                                checked = localAutoSync,
-                                onCheckedChange = { 
-                                    localAutoSync = it
-                                    viewModel.updateAutoSyncSetting(it)
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = onPurpleColor,
-                                    checkedTrackColor = accentColor,
-                                    uncheckedThumbColor = Color.Gray,
-                                    uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
-                                ),
-                                modifier = Modifier.testTag("settings_auto_sync_switch")
+                    FilterChip(
+                        selected = favoritesSubTab == 0,
+                        onClick = { favoritesSubTab = 0 },
+                        label = { Text("Starred Feeds (${favorites.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = "Starred Feeds",
+                                modifier = Modifier.size(14.dp)
                             )
-                        }
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = accentColor,
+                            selectedLabelColor = onPurpleColor,
+                            selectedLeadingIconColor = onPurpleColor,
+                            containerColor = cardBg,
+                            labelColor = Color(0xFFCAC4D0),
+                            iconColor = Color(0xFFCAC4D0)
+                        ),
+                        border = null,
+                        shape = CircleShape,
+                        modifier = Modifier.testTag("fav_subtab_starred")
+                    )
 
-                        Spacer(modifier = Modifier.height(20.dp))
+                    val recordings by viewModel.recordings.collectAsStateWithLifecycle()
+                    FilterChip(
+                        selected = favoritesSubTab == 1,
+                        onClick = { favoritesSubTab = 1 },
+                        label = { Text("Offline Vault (${recordings.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = "Offline Library",
+                                modifier = Modifier.size(14.dp)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = accentColor,
+                            selectedLabelColor = onPurpleColor,
+                            selectedLeadingIconColor = onPurpleColor,
+                            containerColor = cardBg,
+                            labelColor = Color(0xFFCAC4D0),
+                            iconColor = Color(0xFFCAC4D0)
+                        ),
+                        border = null,
+                        shape = CircleShape,
+                        modifier = Modifier.testTag("fav_subtab_vault")
+                    )
+                }
 
-                        Button(
-                            onClick = {
-                                viewModel.syncWithCloudGist()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = accentColor, contentColor = onPurpleColor),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("save_sync_button")
+                if (favoritesSubTab == 0) {
+                    if (favorites.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
                         ) {
-                            if (isLoading) {
-                                CircularProgressIndicator(color = onPurpleColor, modifier = Modifier.size(18.dp))
-                            } else {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = "Sync Now", modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Check for Updates Now", fontWeight = FontWeight.Bold)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FavoriteBorder,
+                                    contentDescription = "No Favorites",
+                                    tint = Color.Gray.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(80.dp)
+                                )
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Text(
+                                    text = "No Saved Favorites",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Tap the heart icon on any channel card while browsing to add it to your quick-access favorites list.",
+                                    fontSize = 13.sp,
+                                    color = Color.Gray,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth(0.85f)
+                                )
+                            }
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 165.dp),
+                            contentPadding = PaddingValues(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 8.dp,
+                                bottom = innerPadding.calculateBottomPadding() + 24.dp
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(
+                                items = favorites,
+                                key = { "fav_${it.name}" },
+                                contentType = { "channel" }
+                            ) { groupedChannel ->
+                                val repChannel = remember(groupedChannel) {
+                                    ChannelEntity(
+                                        id = groupedChannel.originalChannelIds.firstOrNull() ?: 0,
+                                        name = groupedChannel.name,
+                                        streamUrl = groupedChannel.streams.firstOrNull()?.url ?: "",
+                                        logoUrl = groupedChannel.logoUrl,
+                                        categoryId = groupedChannel.categoryId,
+                                        description = groupedChannel.description,
+                                        isFavorite = groupedChannel.isFavorite,
+                                        isBroken = groupedChannel.isBroken
+                                    )
+                                }
+                                val categoryName = categoryMap[repChannel.categoryId] ?: "General"
+                                ChannelCard(
+                                    channel = repChannel,
+                                    categoryName = categoryName,
+                                    onClick = { onCardClick(groupedChannel) },
+                                    onToggleFavorite = { onFavoriteClick(groupedChannel) },
+                                    cardBg = cardBg,
+                                    accentColor = accentColor,
+                                    isScrolling = isScrolling
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    OfflineRecordingsScreen(
+                        viewModel = viewModel,
+                        innerPadding = PaddingValues(bottom = innerPadding.calculateBottomPadding()),
+                        onCardClick = onRecordingCardClick,
+                        cardBg = cardBg,
+                        accentColor = accentColor
+                    )
+                }
+            }
+        } else {
+            // Tab 3: Dedicated Live Search Screen
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = innerPadding.calculateTopPadding())
+            ) {
+                var isSearchFocused by remember { mutableStateOf(false) }
+                val searchBorderColor by animateColorAsState(
+                    targetValue = if (isSearchFocused) accentColor else Color.White.copy(alpha = 0.06f),
+                    animationSpec = tween(durationMillis = 200),
+                    label = "searchBorderColor"
+                )
+
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { viewModel.setSearchQuery(it) },
+                    placeholder = { Text("Search 1,000+ live TV feeds...", color = Color.Gray, fontSize = 14.sp) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = if (isSearchFocused) accentColor else Color.Gray,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear",
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = accentColor,
+                        unfocusedBorderColor = searchBorderColor,
+                        focusedContainerColor = cardBg,
+                        unfocusedContainerColor = cardBg
+                    ),
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .onFocusChanged { isSearchFocused = it.isFocused }
+                        .testTag("search_tab_input")
+                )
+                
+                if (searchQuery.isEmpty()) {
+                    // Popular Suggestions placed directly under the search bar
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = "POPULAR SUGGESTIONS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black,
+                            color = accentColor,
+                            letterSpacing = 1.5.sp
+                        )
+                        
+                        Spacer(modifier = Modifier.height(10.dp))
+                        
+                        val suggestions = listOf("News", "Sports", "Movies", "Music", "Kids", "Entertainment", "Documentary")
+                        
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(suggestions) { keyword ->
+                                Card(
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                                    colors = CardDefaults.cardColors(containerColor = cardBg),
+                                    modifier = Modifier
+                                        .clickable { viewModel.setSearchQuery(keyword) }
+                                        .testTag("search_suggestion_$keyword")
+                                ) {
+                                    Text(
+                                        text = keyword,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                    )
                                 }
                             }
                         }
                     }
-                }
 
-                // Sync Log Status Indicator
-                if (syncStatusMessage != null || lastSyncTime > 0) {
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.03f)),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
-                        modifier = Modifier.fillMaxWidth()
+                    // Centered onboarding/empty search state taking the remaining space
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(modifier = Modifier.size(8.dp).background(if (syncStatusMessage?.contains("failed", ignoreCase = true) == true) Color(0xFFFF8A80) else Color(0xFF81C784), CircleShape))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Cloud Sync status log:",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.LightGray,
-                                    letterSpacing = 1.sp
-                                )
-                            }
-                            if (syncStatusMessage != null) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = syncStatusMessage ?: "",
-                                    fontSize = 13.sp,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            if (lastSyncTime > 0) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()) }
-                                val formattedDate = remember(lastSyncTime) { sdf.format(java.util.Date(lastSyncTime)) }
-                                Text(
-                                    text = "Last sync completed at: $formattedDate",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Section: Stream Link Quality Assurance & Verification
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = cardBg),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
                             Icon(
-                                imageVector = Icons.Default.CheckCircle, 
-                                contentDescription = "Quality Assurance", 
-                                tint = Color(0xFF81C784), 
-                                modifier = Modifier.size(24.dp)
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "Search live streams",
+                                tint = Color.Gray.copy(alpha = 0.3f),
+                                modifier = Modifier.size(80.dp)
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
                             Text(
-                                text = "Stream Quality Filter", 
-                                fontSize = 18.sp, 
-                                fontWeight = FontWeight.Bold, 
+                                text = "Discover Live Feeds",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Scan all streams to identify non-functional links. Broken streams will be automatically excluded from your guide.", 
-                            fontSize = 12.sp, 
-                            color = Color.Gray
-                        )
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Exclude Broken Streams", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                Text("Only show verified, working channels in the player lists", fontSize = 11.sp, color = Color.Gray)
-                            }
-                            Switch(
-                                checked = filterBrokenChannels,
-                                onCheckedChange = { 
-                                    viewModel.updateFilterBrokenSetting(it)
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = onPurpleColor,
-                                    checkedTrackColor = accentColor,
-                                    uncheckedThumbColor = Color.Gray,
-                                    uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
-                                ),
-                                modifier = Modifier.testTag("filter_broken_switch")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Search 1,000+ live streams by channel name, description, category, or country.",
+                                fontSize = 13.sp,
+                                color = Color.Gray,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(0.80f)
                             )
                         }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        if (isCheckingStreams) {
+                    }
+                } else {
+                    val allGroupedChannels = remember(allChannelsRaw) {
+                        viewModel.groupChannels(allChannelsRaw)
+                    }
+                    val filteredChannels = remember(allGroupedChannels, searchQuery) {
+                        allGroupedChannels.filter { groupedChannel ->
+                            groupedChannel.name.contains(searchQuery, ignoreCase = true) ||
+                            groupedChannel.description.contains(searchQuery, ignoreCase = true) ||
+                            (categoryMap[groupedChannel.categoryId]?.contains(searchQuery, ignoreCase = true) == true)
+                        }
+                    }
+                    
+                    if (filteredChannels.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Column(
-                                modifier = Modifier.fillMaxWidth(), 
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(32.dp)
                             ) {
-                                LinearProgressIndicator(
-                                    progress = { streamCheckingProgress },
-                                    color = Color(0xFF81C784),
-                                    trackColor = Color.White.copy(alpha = 0.08f),
-                                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "No results",
+                                    tint = Color.Gray.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(64.dp)
                                 )
+                                Spacer(modifier = Modifier.height(16.dp))
                                 Text(
-                                    text = streamCheckingStatus ?: "Scanning stream links...",
-                                    fontSize = 12.sp,
-                                    color = Color.LightGray,
-                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                    text = "No Channels Found",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "We couldn't find any live feeds matching \"$searchQuery\". Try searching for a different keyword or check your spelling.",
+                                    fontSize = 13.sp,
+                                    color = Color.Gray,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth(0.85f)
                                 )
                             }
-                        } else {
-                            Button(
-                                onClick = {
-                                    viewModel.verifyAllChannels()
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF2E7D32), 
-                                    contentColor = Color.White
-                                ),
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("verify_streams_button")
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check, 
-                                        contentDescription = "Verify", 
-                                        modifier = Modifier.size(16.dp)
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 165.dp),
+                            contentPadding = PaddingValues(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 8.dp,
+                                bottom = innerPadding.calculateBottomPadding() + 24.dp
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(
+                                items = filteredChannels,
+                                key = { "search_${it.name}" },
+                                contentType = { "channel" }
+                            ) { groupedChannel ->
+                                val repChannel = remember(groupedChannel) {
+                                    ChannelEntity(
+                                        id = groupedChannel.originalChannelIds.firstOrNull() ?: 0,
+                                        name = groupedChannel.name,
+                                        streamUrl = groupedChannel.streams.firstOrNull()?.url ?: "",
+                                        logoUrl = groupedChannel.logoUrl,
+                                        categoryId = groupedChannel.categoryId,
+                                        description = groupedChannel.description,
+                                        isFavorite = groupedChannel.isFavorite,
+                                        isBroken = groupedChannel.isBroken
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Scan & Validate All Channels", fontWeight = FontWeight.Bold)
                                 }
+                                val categoryName = categoryMap[repChannel.categoryId] ?: "General"
+                                ChannelCard(
+                                    channel = repChannel,
+                                    categoryName = categoryName,
+                                    onClick = { onCardClick(groupedChannel) },
+                                    onToggleFavorite = { onFavoriteClick(groupedChannel) },
+                                    cardBg = cardBg,
+                                    accentColor = accentColor,
+                                    isScrolling = isScrolling
+                                )
                             }
                         }
                     }
                 }
-
-                // Section 3: App Compliance & Technical Specification Details
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = cardBg),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(imageVector = Icons.Default.Info, contentDescription = "App Info", tint = Color.LightGray, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Application Information", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Engine Version", fontSize = 12.sp, color = Color.Gray)
-                            Text("v1.0.0 (ExoPlayer Live Support)", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
-                        }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Build Compliance", fontSize = 12.sp, color = Color.Gray)
-                            Text("Google Play Console Ready", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
-                        }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Client UTC Time", fontSize = 12.sp, color = Color.Gray)
-                            Text("2026-06-27 02:36:45", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
-                        }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Active Operator", fontSize = 12.sp, color = Color.Gray)
-                            Text("stephanlegarza710", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -1352,17 +1723,31 @@ fun HeroChannelBanner(
     accentColor: Color,
     isScrolling: Boolean = false
 ) {
+    val favScale by animateFloatAsState(
+        targetValue = if (channel.isFavorite) 1.25f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "favScale"
+    )
+
     Card(
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(28.dp),
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1C22)),
         modifier = Modifier
             .fillMaxWidth()
-            .height(210.dp)
+            .height(220.dp)
             .clickable { onClick(channel) }
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             val context = LocalContext.current
+            
+            // Background category gradient fallback
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(brush = getCategoryGradient(categoryName), alpha = 0.35f)
+            )
+
             val imageRequest = remember(channel.logoUrl, isScrolling) {
                 ImageRequest.Builder(context)
                     .data(channel.logoUrl)
@@ -1377,24 +1762,40 @@ fun HeroChannelBanner(
                     .build()
             }
             // Widescreen background backdrop
-            AsyncImage(
+            SubcomposeAsyncImage(
                 model = imageRequest,
                 contentDescription = channel.name,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                loading = {
+                    ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
+                }
             )
 
-            // Bottom cinematic dark vignette
+            // Multi-layered cinematics: Left dark vignette & Bottom dark vignette
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.Black.copy(alpha = 0.2f),
-                                Color.Black.copy(alpha = 0.85f)
+                                Color.Black.copy(alpha = 0.1f),
+                                Color.Black.copy(alpha = 0.9f)
+                            )
+                        )
+                    )
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.85f),
+                                Color.Black.copy(alpha = 0.1f)
                             ),
-                            startY = 0f
+                            endX = 1200f
                         )
                     )
             )
@@ -1415,34 +1816,35 @@ fun HeroChannelBanner(
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
-                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
-                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                            .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(50))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         PulsatingCardIndicator()
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "FEATURED STREAM",
+                            text = "LIVE FEATURED",
                             fontSize = 9.sp,
-                            fontWeight = FontWeight.ExtraBold,
+                            fontWeight = FontWeight.Black,
                             color = Color.White,
-                            letterSpacing = 1.sp
+                            letterSpacing = 1.2.sp
                         )
                     }
 
-                    // Fast Favorite Toggler
+                    // Fast Favorite Toggler with spring bounce
                     IconButton(
                         onClick = { onToggleFavorite(channel) },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(38.dp)
+                            .graphicsLayer(scaleX = favScale, scaleY = favScale)
                             .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
                             .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
                     ) {
                         Icon(
                             imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                             contentDescription = "Favorite",
-                            tint = if (channel.isFavorite) Color(0xFFFF8A80) else Color.White,
-                            modifier = Modifier.size(16.dp)
+                            tint = if (channel.isFavorite) Color(0xFFFF3F3F) else Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -1452,12 +1854,12 @@ fun HeroChannelBanner(
                     Text(
                         text = categoryName.uppercase(),
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.ExtraBold,
                         color = accentColor,
-                        letterSpacing = 1.sp
+                        letterSpacing = 1.5.sp
                     )
 
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
 
                     Text(
                         text = channel.name,
@@ -1465,7 +1867,8 @@ fun HeroChannelBanner(
                         fontWeight = FontWeight.Black,
                         color = Color.White,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        letterSpacing = (-0.5).sp
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
@@ -1476,9 +1879,9 @@ fun HeroChannelBanner(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = channel.description.ifBlank { "Exclusive top-recommended live broadcast stream." },
+                            text = channel.description.ifBlank { "High-fidelity global television feed." },
                             fontSize = 12.sp,
-                            color = Color.LightGray,
+                            color = Color.White.copy(alpha = 0.65f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
@@ -1486,29 +1889,66 @@ fun HeroChannelBanner(
 
                         Spacer(modifier = Modifier.width(16.dp))
 
-                        // Large Play CTA Button
+                        // Large Play CTA Button with subtle luxury white glow
                         Button(
                             onClick = { onClick(channel) },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = accentColor,
-                                contentColor = Color(0xFF381E72)
+                                containerColor = Color.White,
+                                contentColor = Color(0xFF131215)
                             ),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
                             shape = RoundedCornerShape(50),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.PlayArrow,
                                 contentDescription = "Play",
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("WATCH NOW", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                "TUNE IN", 
+                                fontSize = 11.sp, 
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 0.5.sp
+                            )
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+fun ShimmerPlaceholder(modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "thumbnail_shimmer")
+    val translateAnim by transition.animateFloat(
+        initialValue = -300f,
+        targetValue = 600f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1300, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmer_offset"
+    )
+
+    val shimmerColors = listOf(
+        Color.White.copy(alpha = 0.05f),
+        Color.White.copy(alpha = 0.18f),
+        Color.White.copy(alpha = 0.05f)
+    )
+
+    val brush = Brush.linearGradient(
+        colors = shimmerColors,
+        start = Offset(translateAnim, 0f),
+        end = Offset(translateAnim + 300f, 300f)
+    )
+
+    Box(
+        modifier = modifier
+            .background(brush)
+    )
 }
 
 @Composable
@@ -1622,13 +2062,40 @@ fun ChannelCard(
     isScrolling: Boolean = false
 ) {
     val secondaryAccentColor = Color(0xFFEADDFF)
+    val favScale by animateFloatAsState(
+        targetValue = if (channel.isFavorite) 1.22f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "cardFavScale"
+    )
+
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+
+    val isScaleUp = isFocused || isHovered
+    val cardScale by animateFloatAsState(
+        targetValue = if (isScaleUp) 1.05f else 1.00f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "cardScaleAnimation"
+    )
+    val cardBorderColor by animateColorAsState(
+        targetValue = if (isScaleUp) accentColor else Color.White.copy(alpha = 0.05f),
+        animationSpec = tween(durationMillis = 200),
+        label = "cardBorderColorAnimation"
+    )
+
     Card(
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = cardBg),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        border = BorderStroke(1.dp, cardBorderColor),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick(channel) }
+            .graphicsLayer(scaleX = cardScale, scaleY = cardScale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current
+            ) { onClick(channel) }
+            .focusable(interactionSource = interactionSource)
             .testTag("channel_card_${channel.id}")
     ) {
         Column {
@@ -1636,8 +2103,15 @@ fun ChannelCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(110.dp)
+                    .height(115.dp)
             ) {
+                // Background category gradient fallback
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(brush = getCategoryGradient(categoryName), alpha = 0.25f)
+                )
+
                 val context = LocalContext.current
                 val imageRequest = remember(channel.logoUrl, isScrolling) {
                     ImageRequest.Builder(context)
@@ -1650,13 +2124,16 @@ fun ChannelCard(
                                 crossfade(true)
                             }
                         }
-                        .build()
+                    .build()
                 }
-                AsyncImage(
+                SubcomposeAsyncImage(
                     model = imageRequest,
                     contentDescription = channel.name,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    loading = {
+                        ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
+                    }
                 )
 
                 // Dark subtle vignette gradient
@@ -1665,43 +2142,45 @@ fun ChannelCard(
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
-                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f)),
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)),
                                 startY = 40f
                             )
                         )
                 )
 
-                // Category tag
+                // Category tag (glass pill style)
                 Box(
                     modifier = Modifier
                         .padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                        .border(0.5.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(50))
+                        .border(0.5.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .align(Alignment.TopStart)
                 ) {
                     Text(
                         text = categoryName.uppercase(),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = secondaryAccentColor
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Black,
+                        color = secondaryAccentColor,
+                        letterSpacing = 0.5.sp
                     )
                 }
 
-                // Heart favorite indicator overlay
+                // Heart favorite indicator overlay with spring bounce
                 IconButton(
                     onClick = { onToggleFavorite(channel) },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(6.dp)
                         .size(34.dp)
+                        .graphicsLayer(scaleX = favScale, scaleY = favScale)
                         .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
                         .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
                 ) {
                     Icon(
                         imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = "Favorite",
-                        tint = if (channel.isFavorite) Color(0xFFFF8A80) else Color.White,
+                        tint = if (channel.isFavorite) Color(0xFFFF3F3F) else Color.White,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -1716,9 +2195,9 @@ fun ChannelCard(
                     StaticCardIndicator()
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "LIVE",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.ExtraBold,
+                        text = "LIVE FEED",
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Black,
                         color = Color.White,
                         letterSpacing = 0.5.sp
                     )
@@ -1727,23 +2206,23 @@ fun ChannelCard(
 
             // Description and title area
             Column(
-                modifier = Modifier.padding(12.dp)
+                modifier = Modifier.padding(14.dp)
             ) {
                 Text(
                     text = channel.name,
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.ExtraBold,
                     color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
 
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(3.dp))
 
                 Text(
                     text = channel.description.ifBlank { "Tap to stream live feed." },
                     fontSize = 11.sp,
-                    color = Color.Gray,
+                    color = Color.White.copy(alpha = 0.55f),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = 14.sp
@@ -1843,6 +2322,72 @@ fun NetworkConnectionIndicator(isOnline: Boolean, modifier: Modifier = Modifier)
             fontWeight = FontWeight.Bold,
             color = color,
             letterSpacing = 0.5.sp
+        )
+    }
+}
+
+@Composable
+fun ProfileAvatarWithStatus(
+    isOnline: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed = isFocused || isHovered
+    
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 1.05f else 1.00f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "avatarScale"
+    )
+
+    Box(
+        modifier = modifier
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+            .testTag("premium_profile_avatar")
+    ) {
+        // Main Avatar Circle
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            Color(0xFFBB86FC),
+                            Color(0xFF3700B3)
+                        )
+                    )
+                )
+                .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "SL",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color.White,
+                letterSpacing = 0.5.sp
+            )
+        }
+
+        // Active indicator dot like Messenger
+        val statusColor = if (isOnline) Color(0xFF4CAF50) else Color(0xFF757575)
+        Box(
+            modifier = Modifier
+                .size(13.dp)
+                .align(Alignment.BottomEnd)
+                .background(Color(0xFF131215), CircleShape) // Match darkBg
+                .padding(2.dp)
+                .background(statusColor, CircleShape)
         )
     }
 }
@@ -1974,13 +2519,16 @@ fun RecordingCard(
                 contentAlignment = Alignment.Center
             ) {
                 // Channel Logo
-                AsyncImage(
+                SubcomposeAsyncImage(
                     model = recording.channelLogoUrl,
                     contentDescription = recording.channelName,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .size(48.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(8.dp)),
+                    loading = {
+                        ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
+                    }
                 )
 
                 // Time duration badge in bottom right corner
@@ -2072,3 +2620,620 @@ fun RecordingCard(
         }
     }
 }
+
+@Composable
+fun FloatingBottomBarItem(
+    selected: Boolean,
+    onClick: () -> Unit,
+    icon: ImageVector,
+    selectedIcon: ImageVector,
+    label: String,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val scale by animateFloatAsState(
+        targetValue = if (selected) 1.12f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "tabScale"
+    )
+    val dotAlpha by animateFloatAsState(
+        targetValue = if (selected) 1.0f else 0.0f,
+        animationSpec = tween(durationMillis = 250),
+        label = "dotAlpha"
+    )
+    
+    Column(
+        modifier = modifier
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            )
+            .padding(vertical = 4.dp, horizontal = 12.dp)
+            .graphicsLayer(scaleX = scale, scaleY = scale),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .height(34.dp)
+                .width(60.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(if (selected) accentColor.copy(alpha = 0.18f) else Color.Transparent)
+        ) {
+            Icon(
+                imageVector = if (selected) selectedIcon else icon,
+                contentDescription = label,
+                tint = if (selected) accentColor else Color.White.copy(alpha = 0.5f),
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = if (selected) Color.White else Color.White.copy(alpha = 0.45f),
+            letterSpacing = 0.2.sp
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Box(
+            modifier = Modifier
+                .size(4.dp)
+                .graphicsLayer(alpha = dotAlpha)
+                .background(accentColor, CircleShape)
+        )
+    }
+}
+
+@Composable
+fun SettingsOverlayContent(
+    viewModel: ChannelViewModel,
+    innerPadding: PaddingValues,
+    cardBg: Color,
+    accentColor: Color,
+    onPurpleColor: Color,
+    isCheckingStreams: Boolean,
+    streamCheckingProgress: Float,
+    streamCheckingStatus: String?,
+    filterBrokenChannels: Boolean,
+    autoSyncOnLaunch: Boolean,
+    lastSyncTime: Long,
+    syncStatusMessage: String?,
+    isLoading: Boolean,
+    lowLatencyMode: Boolean,
+    cloudGistUrl: String,
+    isPublicMode: Boolean
+) {
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = innerPadding.calculateTopPadding(), bottom = innerPadding.calculateBottomPadding())
+            .padding(horizontal = 16.dp)
+            .verticalScroll(scrollState),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Section 1: Live TV Channel Synchronization (Public-facing, completely secure/hidden URL)
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh, 
+                        contentDescription = "Source Configuration", 
+                        tint = accentColor, 
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Live TV Channel Guide", 
+                        fontSize = 18.sp, 
+                        fontWeight = FontWeight.Bold, 
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Ensure you have the latest available live TV categories and streams. Updates are securely retrieved and locally cached.", 
+                    fontSize = 12.sp, 
+                    color = Color.Gray
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Secured Endpoint Information
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = 0.2f))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Secured",
+                        tint = accentColor.copy(alpha = 0.8f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = "Channel Source Feed",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Gray
+                        )
+                        Text(
+                            text = "Secured Official Provider Endpoint",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Interactive Buttons with feedback
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val syncBtnInteraction = remember { MutableInteractionSource() }
+                    val syncBtnFocused by syncBtnInteraction.collectIsFocusedAsState()
+                    val syncBtnHovered by syncBtnInteraction.collectIsHoveredAsState()
+                    val syncBtnPressed = syncBtnFocused || syncBtnHovered
+                    val syncBtnScale by animateFloatAsState(
+                        targetValue = if (syncBtnPressed) 1.03f else 1.00f,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                        label = "syncBtnScale"
+                    )
+
+                    Button(
+                        onClick = { 
+                            viewModel.syncWithCloudGist(force = true)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = accentColor, contentColor = onPurpleColor),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .graphicsLayer(scaleX = syncBtnScale, scaleY = syncBtnScale)
+                            .focusable(interactionSource = syncBtnInteraction)
+                            .testTag("save_sync_button")
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(color = onPurpleColor, modifier = Modifier.size(18.dp))
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(imageVector = Icons.Default.Check, contentDescription = "Sync Source", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Synchronize Channel Guide Now", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Auto-sync Toggle Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            viewModel.updateAutoSyncSetting(!autoSyncOnLaunch)
+                        }
+                        .background(Color.White.copy(alpha = 0.02f))
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto Sync on Launch", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Automatically synchronize channel configurations on app startup", fontSize = 11.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = autoSyncOnLaunch,
+                        onCheckedChange = { 
+                            viewModel.updateAutoSyncSetting(it)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = onPurpleColor,
+                            checkedTrackColor = accentColor,
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                        ),
+                        modifier = Modifier.testTag("settings_auto_sync_switch")
+                    )
+                }
+            }
+        }
+
+        // Synchronization Status Logs & Feedback Card
+        if (syncStatusMessage != null || lastSyncTime > 0) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.03f)),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(
+                                    if (syncStatusMessage?.contains("failed", ignoreCase = true) == true) Color(0xFFFF8A80) else Color(0xFF81C784), 
+                                    CircleShape
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Cloud Sync Diagnostic Logs",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.LightGray,
+                            letterSpacing = 1.sp
+                        )
+                    }
+                    if (syncStatusMessage != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = syncStatusMessage ?: "",
+                            fontSize = 13.sp,
+                            color = Color.White,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    if (lastSyncTime > 0) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()) }
+                        val formattedDate = remember(lastSyncTime) { sdf.format(java.util.Date(lastSyncTime)) }
+                        Text(
+                            text = "Last synchronized at: $formattedDate (UTC)",
+                            fontSize = 11.sp,
+                            color = Color.Gray
+                        )
+                    }
+                }
+            }
+        }
+
+        // Section 2: Stream Quality Assurance & Filters
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle, 
+                        contentDescription = "Quality Assurance", 
+                        tint = Color(0xFF81C784), 
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Stream Quality and Link Validation", 
+                        fontSize = 18.sp, 
+                        fontWeight = FontWeight.Bold, 
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Scan existing streams dynamically to discover and filter out offline or non-functional streams automatically.", 
+                    fontSize = 12.sp, 
+                    color = Color.Gray
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Row click mapped switch toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            viewModel.updateFilterBrokenSetting(!filterBrokenChannels)
+                        }
+                        .background(Color.White.copy(alpha = 0.02f))
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Exclude Offline Feeds", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Strictly show tested working links in your guide lists", fontSize = 11.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = filterBrokenChannels,
+                        onCheckedChange = { 
+                            viewModel.updateFilterBrokenSetting(it)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = onPurpleColor,
+                            checkedTrackColor = accentColor,
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                        ),
+                        modifier = Modifier.testTag("filter_broken_switch")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                if (isCheckingStreams) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(), 
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { streamCheckingProgress },
+                            color = Color(0xFF81C784),
+                            trackColor = Color.White.copy(alpha = 0.08f),
+                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp))
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = streamCheckingStatus ?: "Validating streams...",
+                                fontSize = 12.sp,
+                                color = Color.LightGray,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                modifier = Modifier.weight(1f)
+                            )
+                            val percent = (streamCheckingProgress * 100).toInt()
+                            Text(
+                                text = "$percent%",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF81C784)
+                            )
+                        }
+                    }
+                } else {
+                    val validateBtnInteraction = remember { MutableInteractionSource() }
+                    val validateBtnFocused by validateBtnInteraction.collectIsFocusedAsState()
+                    val validateBtnHovered by validateBtnInteraction.collectIsHoveredAsState()
+                    val validateBtnPressed = validateBtnFocused || validateBtnHovered
+                    val validateBtnScale by animateFloatAsState(
+                        targetValue = if (validateBtnPressed) 1.02f else 1.00f,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                        label = "validateBtnScale"
+                    )
+
+                    Button(
+                        onClick = { viewModel.verifyAllChannels() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF2E7D32), 
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .graphicsLayer(scaleX = validateBtnScale, scaleY = validateBtnScale)
+                            .focusable(interactionSource = validateBtnInteraction)
+                            .testTag("verify_streams_button")
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Check, 
+                                contentDescription = "Verify All", 
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Scan & Validate All Channels Now", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section 3: Player Settings (Low Latency Mode)
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Settings, 
+                        contentDescription = "Player Preferences", 
+                        tint = accentColor, 
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Player Engine Preferences", 
+                        fontSize = 18.sp, 
+                        fontWeight = FontWeight.Bold, 
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Optimize ExoPlayer settings for real-time live television stream quality and caching performance.", 
+                    fontSize = 12.sp, 
+                    color = Color.Gray
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Row click mapped switch toggle for Low Latency
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            viewModel.setLowLatencyMode(!lowLatencyMode)
+                        }
+                        .background(Color.White.copy(alpha = 0.02f))
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Low Latency Playback", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Reduces buffer sizes to stay closer to real-time broadcasts", fontSize = 11.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = lowLatencyMode,
+                        onCheckedChange = { 
+                            viewModel.setLowLatencyMode(it)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = onPurpleColor,
+                            checkedTrackColor = accentColor,
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                        ),
+                        modifier = Modifier.testTag("low_latency_switch")
+                    )
+                }
+            }
+        }
+
+        // Section 3.5: Resource Constraints (Sync over Wi-Fi Only)
+        var unmeteredSyncOnly by remember { mutableStateOf(viewModel.getUnmeteredSyncOnly()) }
+
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Resource Constraints",
+                            tint = accentColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Resource Constraints",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                    Text(
+                        text = "BATTERY SAVER",
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFFD54F),
+                        modifier = Modifier
+                            .background(Color(0xFFFFD54F).copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Manage network usage policies and system health limits for automated background updates.",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            val newValue = !unmeteredSyncOnly
+                            unmeteredSyncOnly = newValue
+                            viewModel.setUnmeteredSyncOnly(newValue)
+                        }
+                        .background(Color.White.copy(alpha = 0.02f))
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Sync over Wi-Fi Only", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Only sync and verify channels when on a Wi-Fi connection", fontSize = 11.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = unmeteredSyncOnly,
+                        onCheckedChange = { newValue ->
+                            unmeteredSyncOnly = newValue
+                            viewModel.setUnmeteredSyncOnly(newValue)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = onPurpleColor,
+                            checkedTrackColor = accentColor,
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                        ),
+                        modifier = Modifier.testTag("settings_unmetered_sync_switch")
+                    )
+                }
+            }
+        }
+
+        // Section 4: App Diagnostics & Metadata Information
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Default.Info, contentDescription = "Diagnostics", tint = Color.LightGray, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Application Diagnostic Details", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Engine Decoder", fontSize = 12.sp, color = Color.Gray)
+                    Text("ExoPlayer 2.19 (Live TV Native Core)", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Build Verification", fontSize = 12.sp, color = Color.Gray)
+                    Text("Google Play Ready (M3 Adaptive UI)", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Active Client Node Time", fontSize = 12.sp, color = Color.Gray)
+                    Text("2026-07-03 02:05:43 UTC", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Authorized Operator", fontSize = 12.sp, color = Color.Gray)
+                    Text("stephanlegarza710", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+

@@ -22,5 +22,6 @@ data class ChannelEntity(
     val tvgName: String = "",
     val lastChecked: Long = 0L,
     val playbackSources: List<PlaybackSource> = emptyList(),
-    val playlistUrl: String = ""
+    val playlistUrl: String = "",
+    val channelHealth: String = "Unknown"
 )
