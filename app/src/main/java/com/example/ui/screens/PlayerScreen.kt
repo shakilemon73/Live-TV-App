@@ -160,19 +160,7 @@ fun PlayerScreen(
             "Zoom" -> "Zoom ($videoText)"
             "Stretch" -> "Stretch ($videoText)"
             else -> {
-                val screenW = context.resources.displayMetrics.widthPixels
-                val screenH = context.resources.displayMetrics.heightPixels
-                val screenRatio = if (screenH > 0) screenW.toFloat() / screenH else 1.77f
-                val videoRatio = if (videoHeight > 0) videoWidth.toFloat() / videoHeight else 1.77f
-                val ratioDiff = Math.abs(screenRatio - videoRatio) / videoRatio
-                val action = if (isTv) {
-                    if (ratioDiff < 0.20f) "Immersive Zoom" else "Fit To Screen"
-                } else if (isLandscape) {
-                    if (ratioDiff < 0.25f) "Borderless Fit" else "Fit To Screen"
-                } else {
-                    "Centered Fit"
-                }
-                "Auto Fit: $screenType ($action)"
+                "Auto Fit: $screenType (Perfect Fit)"
             }
         }
     }
@@ -183,22 +171,9 @@ fun PlayerScreen(
             "Zoom" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
             "Stretch" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
             else -> {
-                if (videoWidth <= 0 || videoHeight <= 0) {
-                    AspectRatioFrameLayout.RESIZE_MODE_FIT
-                } else {
-                    val screenW = context.resources.displayMetrics.widthPixels
-                    val screenH = context.resources.displayMetrics.heightPixels
-                    val screenRatio = if (screenH > 0) screenW.toFloat() / screenH else 1.77f
-                    val videoRatio = videoWidth.toFloat() / videoHeight
-                    val ratioDiff = Math.abs(screenRatio - videoRatio) / videoRatio
-                    if (isTv) {
-                        if (ratioDiff < 0.10f) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    } else if (isLandscape) {
-                        if (ratioDiff < 0.20f) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    } else {
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    }
-                }
+                // To prevent cutting off any part of the channel's stream on any mobile or TV screen,
+                // Auto-select mode always utilizes RESIZE_MODE_FIT to keep the entire content visible.
+                AspectRatioFrameLayout.RESIZE_MODE_FIT
             }
         }
     }
@@ -804,127 +779,6 @@ fun PlayerScreen(
                             }
                         }
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(top = 6.dp)
-                        ) {
-                            // Stream Health Badge
-                            val health = channel.channelHealth.ifBlank { "Unknown" }
-                            val (healthColor, healthIcon) = when (health.lowercase()) {
-                                "excellent" -> Color(0xFF81C784) to Icons.Default.CheckCircle
-                                "good" -> Color(0xFF4DB6AC) to Icons.Default.CheckCircle
-                                "fair" -> Color(0xFFFFD54F) to Icons.Default.Info
-                                "poor" -> Color(0xFFFFB74D) to Icons.Default.Warning
-                                "offline" -> Color(0xFFFF8A80) to Icons.Default.Warning
-                                else -> Color(0xFFB0BEC5) to Icons.Default.Info
-                            }
-                            
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .background(healthColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                                    .border(0.5.dp, healthColor.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Icon(
-                                    imageVector = healthIcon,
-                                    contentDescription = "Stream Health Status",
-                                    tint = healthColor,
-                                    modifier = Modifier.size(10.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "HEALTH: ${health.uppercase()}",
-                                    color = healthColor,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.5.sp
-                                )
-                            }
-                            
-                            // Real-time Throughput / Bandwidth Badge
-                            val bps = diagnostics?.bitrateEstimate ?: 0L
-                            if (bps > 0) {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "•",
-                                    fontSize = 11.sp,
-                                    color = Color.White.copy(alpha = 0.5f)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                
-                                val kbps = bps / 1000
-                                val mbps = kbps / 1000f
-                                val formattedSpeed = if (mbps >= 1.0f) {
-                                    String.format("%.1f Mbps", mbps)
-                                } else {
-                                    "$kbps Kbps"
-                                }
-                                
-                                val bandwidthColor = when {
-                                    mbps >= 4f -> Color(0xFF81C784) // Excellent speed
-                                    mbps >= 1.5f -> Color(0xFF4DB6AC) // Good speed
-                                    mbps >= 0.5f -> Color(0xFFFFD54F) // Fair speed
-                                    else -> Color(0xFFFFB74D) // Low speed
-                                }
-                                
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .background(bandwidthColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                                        .border(0.5.dp, bandwidthColor.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Bandwidth Throughput",
-                                        tint = bandwidthColor,
-                                        modifier = Modifier.size(10.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "SPEED: $formattedSpeed",
-                                        color = bandwidthColor,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 0.5.sp
-                                    )
-                                }
-                            }
-                        }
-
-                        // Playback Telemetry Row
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(top = 4.dp)
-                        ) {
-                            val ttff = diagnostics?.timeToFirstFrameMs ?: 0L
-                            val rebuffers = diagnostics?.rebufferCount ?: 0
-                            val errorRate = viewModel.getChannelErrorRate(channel.id)
-                            
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
-                                    .border(0.5.dp, Color.White.copy(alpha = 0.20f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Info,
-                                    contentDescription = "Playback Telemetry",
-                                    tint = Color(0xFFD0BCFF),
-                                    modifier = Modifier.size(10.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "TTFF: ${if (ttff > 0) "${ttff}ms" else "Measuring..."} • REBUFFERS: $rebuffers • ERROR RATE: ${"%.1f".format(errorRate * 100)}%",
-                                    color = Color.White.copy(alpha = 0.7f),
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.5.sp
-                                )
-                            }
-                        }
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -1081,16 +935,17 @@ fun PlayerScreen(
                 Box(
                     modifier = Modifier
                         .size(52.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
-                        .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                         .clickable { isMuted = !isMuted }
                         .testTag("player_mute_button"),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = if (isMuted) "🔇" else "🔊",
-                        fontSize = 20.sp,
-                        textAlign = TextAlign.Center
+                    Icon(
+                        imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                        contentDescription = if (isMuted) "Unmute" else "Mute",
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
 
@@ -1098,8 +953,8 @@ fun PlayerScreen(
                 Box(
                     modifier = Modifier
                         .size(52.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
-                        .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                         .clickable {
                             activePlayer?.let { player ->
                                 val target = (player.currentPosition - 10000).coerceAtLeast(0)
@@ -1116,12 +971,12 @@ fun PlayerScreen(
                             contentDescription = "Seek Backward 10s",
                             tint = Color.White,
                             modifier = Modifier
-                                .size(20.dp)
+                                .size(18.dp)
                                 .graphicsLayer(scaleX = -1f) // Flip horizontally for reverse direction
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "-10s",
+                            text = "10s",
                             color = Color.White,
                             fontSize = 8.sp,
                             fontWeight = FontWeight.Bold
@@ -1133,36 +988,25 @@ fun PlayerScreen(
                 Box(
                     modifier = Modifier
                         .size(76.dp)
-                        .background(Color(0xFFD0BCFF).copy(alpha = 0.9f), RoundedCornerShape(50))
-                        .border(2.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(50))
+                        .background(Color.White, CircleShape) // Ultra-premium pure white play circle
                         .clickable { isPlaying = !isPlaying }
                         .testTag("player_play_pause_button"),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isPlaying) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(modifier = Modifier.width(6.dp).height(24.dp).background(Color(0xFF381E72), RoundedCornerShape(2.dp)))
-                            Box(modifier = Modifier.width(6.dp).height(24.dp).background(Color(0xFF381E72), RoundedCornerShape(2.dp)))
-                        }
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = "Play",
-                            tint = Color(0xFF381E72),
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.Black, // High contrast black on white is highly premium
+                        modifier = Modifier.size(36.dp)
+                    )
                 }
 
                 // 4. Seek Forward 10s button
                 Box(
                     modifier = Modifier
                         .size(52.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
-                        .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                         .clickable {
                             activePlayer?.let { player ->
                                 val target = player.currentPosition + 10000
@@ -1179,11 +1023,11 @@ fun PlayerScreen(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = "Seek Forward 10s",
                             tint = Color.White,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "+10s",
+                            text = "10s",
                             color = Color.White,
                             fontSize = 8.sp,
                             fontWeight = FontWeight.Bold
@@ -1196,14 +1040,14 @@ fun PlayerScreen(
                     modifier = Modifier
                         .size(52.dp)
                         .background(
-                            if (showDescriptionCard) Color(0xFFD0BCFF).copy(alpha = 0.25f)
-                            else Color.Black.copy(alpha = 0.6f),
-                            RoundedCornerShape(50)
+                            if (showDescriptionCard) Color.White.copy(alpha = 0.2f)
+                            else Color.Black.copy(alpha = 0.5f),
+                            CircleShape
                         )
                         .border(
                             1.dp,
-                            if (showDescriptionCard) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.15f),
-                            RoundedCornerShape(50)
+                            if (showDescriptionCard) Color.White else Color.White.copy(alpha = 0.15f),
+                            CircleShape
                         )
                         .clickable { showDescriptionCard = !showDescriptionCard }
                         .testTag("player_info_toggle_button"),
@@ -1212,8 +1056,8 @@ fun PlayerScreen(
                     Icon(
                         imageVector = Icons.Default.Info,
                         contentDescription = "Toggle Description",
-                        tint = if (showDescriptionCard) Color(0xFFD0BCFF) else Color.White,
-                        modifier = Modifier.size(24.dp)
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
@@ -2031,6 +1875,81 @@ fun PlayerScreen(
                             color = Color.LightGray,
                             lineHeight = 18.sp
                         )
+
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Text(
+                            text = "TECHNICAL DIAGNOSTICS",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFD0BCFF),
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        
+                        androidx.compose.material3.Card(
+                            colors = androidx.compose.material3.CardDefaults.cardColors(
+                                containerColor = Color.White.copy(alpha = 0.04f)
+                            ),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                // Health Row
+                                val health = channel.channelHealth.ifBlank { "Unknown" }
+                                val healthColor = when (health.lowercase()) {
+                                    "excellent", "good" -> Color(0xFF81C784)
+                                    "fair" -> Color(0xFFFFD54F)
+                                    "poor" -> Color(0xFFFFB74D)
+                                    else -> Color(0xFFFF8A80)
+                                }
+                                DiagnosticItem(
+                                    label = "Connection Health",
+                                    value = health.uppercase(),
+                                    valueColor = healthColor
+                                )
+                                
+                                // Speed Row
+                                val bps = diagnostics?.bitrateEstimate ?: 0L
+                                val speedText = if (bps > 0) {
+                                    val kbps = bps / 1000
+                                    val mbps = kbps / 1000f
+                                    if (mbps >= 1.0f) String.format("%.1f Mbps", mbps) else "$kbps Kbps"
+                                } else "Measuring..."
+                                DiagnosticItem(
+                                    label = "Download Speed",
+                                    value = speedText,
+                                    valueColor = Color.White
+                                )
+                                
+                                // TTFF Row
+                                val ttff = diagnostics?.timeToFirstFrameMs ?: 0L
+                                DiagnosticItem(
+                                    label = "Time To First Frame",
+                                    value = if (ttff > 0) "${ttff}ms" else "Measuring...",
+                                    valueColor = Color.White
+                                )
+                                
+                                // Rebuffers Row
+                                val rebuffers = diagnostics?.rebufferCount ?: 0
+                                DiagnosticItem(
+                                    label = "Session Rebuffers",
+                                    value = "$rebuffers",
+                                    valueColor = if (rebuffers > 0) Color(0xFFFFB74D) else Color.White
+                                )
+                                
+                                // Error Rate Row
+                                val errorRate = viewModel.getChannelErrorRate(channel.id)
+                                DiagnosticItem(
+                                    label = "Channel Error Rate",
+                                    value = "${"%.1f".format(errorRate * 100)}%",
+                                    valueColor = if (errorRate > 0.1f) Color(0xFFFF8A80) else Color.White
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2228,5 +2147,26 @@ fun VerticalVolumeSlider(
                 textAlign = TextAlign.Center
             )
         }
+    }
+}
+
+@Composable
+fun DiagnosticItem(label: String, value: String, valueColor: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            color = Color.Gray
+        )
+        Text(
+            text = value,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = valueColor
+        )
     }
 }

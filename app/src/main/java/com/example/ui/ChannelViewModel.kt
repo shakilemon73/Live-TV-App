@@ -31,9 +31,6 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.net.URL
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.util.concurrent.TimeUnit
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 
@@ -469,10 +466,7 @@ class ChannelViewModel(
             _isPublicMode.value = publicMode
             
             _localSyncStatusMessage.value = "Cloud Sync configurations updated."
-            
-            if (oldUrl != url) {
-                syncWithCloudGist(force = true)
-            }
+            syncWithCloudGist(force = true)
         }
     }
 

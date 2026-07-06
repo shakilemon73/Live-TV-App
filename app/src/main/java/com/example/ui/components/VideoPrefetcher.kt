@@ -22,7 +22,72 @@ object VideoPrefetcher {
     suspend fun prefetch(context: Context, videoUrl: String) = withContext(Dispatchers.IO) {
         if (videoUrl.isBlank()) return@withContext
         
-        val lowerUrl = videoUrl.lowercase()
+        var cleanUrl = videoUrl
+        val customHeaders = mutableMapOf<String, String>()
+        
+        val delimiterIndex = videoUrl.indexOf("|").let { 
+            if (it != -1) it else videoUrl.indexOf("%7C", ignoreCase = true) 
+        }
+        if (delimiterIndex != -1) {
+            val isPipe = videoUrl[delimiterIndex] == '|'
+            val delimiterLen = if (isPipe) 1 else 3
+            try {
+                val cleanUrlEncoded = videoUrl.substring(0, delimiterIndex)
+                val headerParamsEncoded = videoUrl.substring(delimiterIndex + delimiterLen)
+                
+                cleanUrl = try {
+                    java.net.URLDecoder.decode(cleanUrlEncoded, "UTF-8")
+                } catch (e: Exception) {
+                    cleanUrlEncoded
+                }
+                
+                headerParamsEncoded.split("&").forEach { param ->
+                    val kv = param.split("=", limit = 2)
+                    if (kv.size == 2) {
+                        val key = try {
+                            java.net.URLDecoder.decode(kv[0].trim(), "UTF-8")
+                        } catch (e: Exception) {
+                            kv[0].trim()
+                        }
+                        val value = try {
+                            java.net.URLDecoder.decode(kv[1].trim(), "UTF-8")
+                        } catch (e: Exception) {
+                            kv[1].trim()
+                        }
+                        if (key.isNotBlank() && value.isNotBlank()) {
+                            customHeaders[key] = value
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error parsing pipe-separated headers for prefetch: $videoUrl", e)
+            }
+        } else {
+            try {
+                val uri = Uri.parse(videoUrl)
+                val queryNames = uri.queryParameterNames
+                if (queryNames.any { it.startsWith("http_") }) {
+                    val urlBuilder = uri.buildUpon()
+                    queryNames.forEach { name ->
+                        if (name.startsWith("http_")) {
+                            val headerName = name.removePrefix("http_")
+                                .split("_")
+                                .joinToString("-") { it.replaceFirstChar { c -> c.uppercase() } }
+                            val headerValue = uri.getQueryParameter(name)
+                            if (headerValue != null) {
+                                customHeaders[headerName] = headerValue
+                                urlBuilder.clearQuery() // simple cleanup
+                            }
+                        }
+                    }
+                    cleanUrl = urlBuilder.build().toString()
+                }
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+        
+        val lowerUrl = cleanUrl.lowercase()
         if (lowerUrl.startsWith("rtsp://") || lowerUrl.startsWith("rtsps://")) {
             // RTSP is a custom real-time transport protocol and bypasses the HTTP disk cache
             return@withContext
@@ -49,6 +114,10 @@ object VideoPrefetcher {
             val httpDataSourceFactory = DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
             
+            if (customHeaders.isNotEmpty()) {
+                httpDataSourceFactory.setDefaultRequestProperties(customHeaders)
+            }
+            
             val cacheDataSource = CacheDataSource.Factory()
                 .setCache(cache)
                 .setUpstreamDataSourceFactory(httpDataSourceFactory)
@@ -56,7 +125,7 @@ object VideoPrefetcher {
                 .createDataSource()
             
             val dataSpec = DataSpec.Builder()
-                .setUri(Uri.parse(videoUrl))
+                .setUri(Uri.parse(cleanUrl))
                 .setPosition(0)
                 .setLength(size)
                 .build()
@@ -69,9 +138,9 @@ object VideoPrefetcher {
             )
 
             cacheWriter.cache()
-            Log.d(TAG, "Successfully prefetched $size bytes of stream: $videoUrl")
+            Log.d(TAG, "Successfully prefetched $size bytes of stream: $cleanUrl")
         } catch (e: Exception) {
-            Log.w(TAG, "Prefetch failed or interrupted for $videoUrl: ${e.message}")
+            Log.w(TAG, "Prefetch failed or interrupted for $cleanUrl: ${e.message}")
         }
     }
 }

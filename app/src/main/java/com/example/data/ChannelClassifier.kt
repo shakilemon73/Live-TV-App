@@ -208,7 +208,7 @@ object ChannelClassifier {
             normalized.contains("kid") || normalized.contains("child") || normalized.contains("cartoon") -> CategoryNames.KIDS
             normalized.contains("music") || normalized.contains("song") -> CategoryNames.MUSIC
             normalized.contains("doc") || normalized.contains("science") -> CategoryNames.DOCUMENTARY
-            normalized.contains("movie") || normalized.contains("cinema") || normalized.contains("ent") || normalized.contains("series") -> CategoryNames.ENTERTAINMENT
+            normalized.contains("movie") || normalized.contains("cinema") || normalized.contains("ent") || normalized.contains("series") || normalized.contains("tv") -> CategoryNames.ENTERTAINMENT
             else -> {
                 // Format the group-title beautifully
                 group.replace("_", " ").split(" ").joinToString(" ") { token ->

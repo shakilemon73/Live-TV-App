@@ -43,10 +43,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 // Resilience Playback Buffer Constants
-const val LOW_LATENCY_MIN_BUFFER_MS = 10000
-const val LOW_LATENCY_MAX_BUFFER_MS = 30000
-const val LOW_LATENCY_BUFFER_FOR_PLAYBACK_MS = 1500
-const val LOW_LATENCY_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 3000
+const val LOW_LATENCY_MIN_BUFFER_MS = 15000
+const val LOW_LATENCY_MAX_BUFFER_MS = 45000
+const val LOW_LATENCY_BUFFER_FOR_PLAYBACK_MS = 2500
+const val LOW_LATENCY_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5000
 
 const val STANDARD_MIN_BUFFER_MS = 45000
 const val STANDARD_MAX_BUFFER_MS = 90000
@@ -91,7 +91,6 @@ fun VideoPlayer(
     val context = LocalContext.current
     var hasError by remember { mutableStateOf(false) }
     var isBuffering by remember { mutableStateOf(false) }
-    var isLocked by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     var retryCount by remember(videoUrl) { mutableStateOf(0) }
@@ -130,11 +129,7 @@ fun VideoPlayer(
     val exoPlayer = remember(context, lowLatencyEnabled, isAppActive, customBandwidthMeter) {
         if (!isAppActive || customBandwidthMeter == null) return@remember null
 
-        val playerContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            context.createAttributionContext("default")
-        } else {
-            context
-        }
+        val playerContext = context
 
         // 1. Configure the Adaptive Track Selection Factory to drop quality aggressively but upgrade conservatively
         val trackSelectionFactory = AdaptiveTrackSelection.Factory(
@@ -174,8 +169,118 @@ fun VideoPlayer(
             setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         }
 
-        // 3. Integrate shared cache datasource into the MediaSource factory with playlist-aware live routing
-        val httpDataSourceFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(com.example.data.CachedHttpClient.getClient(playerContext))
+        // 3. Create a customized OkHttpClient for the media player to dynamically inject custom headers (User-Agent, Referer, Authorization, etc.)
+        val basePlayerClient = com.example.data.CachedHttpClient.getBaseClient()
+        val sessionHeaders = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val playerOkHttpClient = basePlayerClient.newBuilder()
+            .addInterceptor { chain ->
+                val originalRequest = chain.request()
+                val requestBuilder = originalRequest.newBuilder()
+                
+                // Always disable HTTP caching for player requests to prevent infinite buffering on live streams
+                requestBuilder.header("Cache-Control", "no-cache, no-store, must-revalidate")
+                requestBuilder.header("Pragma", "no-cache")
+                requestBuilder.header("Expires", "0")
+                
+                // Always set a modern browser User-Agent as default if not already set,
+                // matching M3uParserService's custom user agent to bypass typical server-side blocks.
+                if (originalRequest.header("User-Agent") == null) {
+                    requestBuilder.header(
+                        "User-Agent",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    )
+                }
+                
+                val originalUrlString = originalRequest.url.toString()
+                val delimiterIndex = originalUrlString.indexOf("|").let { 
+                    if (it != -1) it else originalUrlString.indexOf("%7C", ignoreCase = true) 
+                }
+                if (delimiterIndex != -1) {
+                    val isPipe = originalUrlString[delimiterIndex] == '|'
+                    val delimiterLen = if (isPipe) 1 else 3
+                    try {
+                        val cleanUrlEncoded = originalUrlString.substring(0, delimiterIndex)
+                        val headerParamsEncoded = originalUrlString.substring(delimiterIndex + delimiterLen)
+                        
+                        val cleanUrl = try {
+                            java.net.URLDecoder.decode(cleanUrlEncoded, "UTF-8")
+                        } catch (e: Exception) {
+                            cleanUrlEncoded
+                        }
+                        
+                        // New stream started: clear previous session headers
+                        sessionHeaders.clear()
+                        
+                        // Parse header parameters: e.g. Referer=http://example.com&Authorization=Bearer%20token
+                        headerParamsEncoded.split("&").forEach { param ->
+                            val kv = param.split("=", limit = 2)
+                            if (kv.size == 2) {
+                                val rawKey = try {
+                                    java.net.URLDecoder.decode(kv[0].trim(), "UTF-8")
+                                } catch (e: Exception) {
+                                    kv[0].trim()
+                                }
+                                val key = when (rawKey.lowercase()) {
+                                    "http-referrer", "referrer", "referer" -> "Referer"
+                                    "http-origin", "origin" -> "Origin"
+                                    "http-user-agent", "user-agent", "http-useragent" -> "User-Agent"
+                                    else -> rawKey
+                                }
+                                val rawValue = kv[1].trim()
+                                val value = try {
+                                    java.net.URLDecoder.decode(rawValue, "UTF-8")
+                                } catch (e: Exception) {
+                                    rawValue
+                                }
+                                if (key.isNotBlank() && value.isNotBlank()) {
+                                    requestBuilder.header(key, value)
+                                    sessionHeaders[key] = value // Save for subsequent segment requests!
+                                }
+                            }
+                        }
+                        
+                        // Set the clean URL without the trailing pipe parameters
+                        requestBuilder.url(cleanUrl)
+                    } catch (e: Exception) {
+                        android.util.Log.e("VideoPlayerHeaders", "Error parsing pipe-separated headers from URL: $originalUrlString", e)
+                    }
+                } else {
+                    // No pipe in URL, apply stored session headers to this sub-request (e.g. HLS segments)
+                    sessionHeaders.forEach { (key, value) ->
+                        requestBuilder.header(key, value)
+                    }
+                    
+                    // Also support standard query parameters prefixed with http_
+                    // e.g. http://domain.com/live.m3u8?http_referer=http://site.com -> Referer: http://site.com
+                    val url = originalRequest.url
+                    var modifiedUrl = url
+                    val queryNames = url.queryParameterNames
+                    
+                    if (queryNames.any { it.startsWith("http_") }) {
+                        val urlBuilder = url.newBuilder()
+                        queryNames.forEach { name ->
+                            if (name.startsWith("http_")) {
+                                val headerName = name.removePrefix("http_")
+                                    .split("_")
+                                    .joinToString("-") { it.replaceFirstChar { c -> c.uppercase() } }
+                                val headerValue = url.queryParameter(name)
+                                if (headerValue != null) {
+                                    requestBuilder.header(headerName, headerValue)
+                                    urlBuilder.removeAllQueryParameters(name)
+                                }
+                            }
+                        }
+                        modifiedUrl = urlBuilder.build()
+                        requestBuilder.url(modifiedUrl)
+                    }
+                }
+                
+                chain.proceed(requestBuilder.build())
+            }
+            .build()
+
+        val httpDataSourceFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(playerOkHttpClient)
+            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
         val liveTvDataSourceFactory = LiveTvDataSourceFactory(
             playerContext,
@@ -265,14 +370,12 @@ fun VideoPlayer(
                     rebufferCount++
                     android.util.Log.d("LiveTvTelemetry", "Rebuffer detected. Total rebuffers in session: $rebufferCount")
                 }
-                // Introduce isLocked flag: true while buffer event or current playback state is active
-                isLocked = (state == Player.STATE_BUFFERING || state == Player.STATE_READY)
-                android.util.Log.d("VideoPlayer", "onPlaybackStateChanged: state=$state, isLocked=$isLocked")
+                android.util.Log.d("VideoPlayer", "onPlaybackStateChanged: state=$state")
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                isLocked = false // Release lock on error to allow manual retry or automatic channel switch
-                
+                android.util.Log.e("VideoPlayer", "Playback error (code=${error.errorCodeName}, ${error.errorCode}). Message: ${error.message}, Cause: ${error.cause}")
+
                 if (retryCount < 3) {
                     val backoffDelay = when (retryCount) {
                         0 -> 1000L
@@ -334,14 +437,13 @@ fun VideoPlayer(
         val currentMediaUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
         val isSameUrl = currentMediaUri == videoUrl
         
-        if (isLocked && isSameUrl) {
-            android.util.Log.d("VideoPlayer", "Playback lock is ACTIVE; skipping ExoPlayer.prepare() to prevent state thrashing.")
+        // Only skip if the player is already playing or actively buffering the same URL, and has no playback error
+        if (isSameUrl && 
+            (exoPlayer.playbackState == Player.STATE_READY || exoPlayer.playbackState == Player.STATE_BUFFERING) &&
+            exoPlayer.playerError == null
+        ) {
+            android.util.Log.d("VideoPlayer", "Already playing/buffering the same URL; skipping ExoPlayer.prepare().")
             return@LaunchedEffect
-        }
-        
-        // Reset lock on loading a new stream
-        if (!isSameUrl) {
-            isLocked = false
         }
         
         hasError = false
@@ -370,7 +472,7 @@ fun VideoPlayer(
 
         val mediaItem = MediaItem.Builder()
             .setUri(videoUrl)
-            .setMimeType(mimeType)
+            .setMimeType(if (mimeType == null && videoUrl.contains(".m3u8", ignoreCase = true)) MimeTypes.APPLICATION_M3U8 else mimeType)
             .setLiveConfiguration(liveConfig)
             .build()
         exoPlayer.setMediaItem(mediaItem)
@@ -616,13 +718,22 @@ class LiveTvDataSource(
                          uriString.contains("/dash/") || 
                          uriString.contains("/m3u8") ||
                          uriString.contains("/smooth/") ||
-                         uriString.contains("/manifest")
+                         uriString.contains("/manifest") ||
+                         uriString.contains(".ts") ||
+                         uriString.contains("/ts") ||
+                         uriString.contains("ext=ts") ||
+                         uriString.contains(".m4s") ||
+                         uriString.contains("/m4s")
 
-        activeDataSource = if (isPlaylist) {
+        val isLengthUnset = dataSpec.length == -1L
+
+        // Bypass cache for playlists, segment files, or any streams of unknown/unset length (live streams)
+        activeDataSource = if (isPlaylist || isLengthUnset) {
             upstreamDataSource
         } else {
             cacheDataSource
         }
+        android.util.Log.d("LiveTvDataSource", "Opening URI: ${dataSpec.uri}, isPlaylist: $isPlaylist, length: ${dataSpec.length}, isLengthUnset: $isLengthUnset, choosing: ${if (isPlaylist || isLengthUnset) "Upstream" else "Cache"}")
         return activeDataSource.open(dataSpec)
     }
 

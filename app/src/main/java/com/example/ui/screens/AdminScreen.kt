@@ -1030,6 +1030,30 @@ fun CloudSyncSettingsView(
                         ),
                         border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
                     )
+                    AssistChip(
+                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8" },
+                        label = { Text("Doms9 US TV", fontSize = 10.sp, color = Color.White) },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color.White.copy(alpha = 0.05f)
+                        ),
+                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
+                    )
+                    AssistChip(
+                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8" },
+                        label = { Text("Doms9 Events", fontSize = 10.sp, color = Color.White) },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color.White.copy(alpha = 0.05f)
+                        ),
+                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
+                    )
+                    AssistChip(
+                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8, https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8" },
+                        label = { Text("Doms9 Merged (Events + TV)", fontSize = 10.sp, color = Color.White) },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color.White.copy(alpha = 0.05f)
+                        ),
+                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
+                    )
                 }
 
                 // Auto Sync On Launch Row

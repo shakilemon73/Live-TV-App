@@ -16,6 +16,7 @@ import javax.net.ssl.HttpsURLConnection
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import androidx.room.withTransaction
 
 class LiveTvRepository(private val dao: LiveTvDao, private val context: android.content.Context) {
     private val okHttpClient = com.example.data.CachedHttpClient.getClient(context)
@@ -183,158 +184,162 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
     private suspend fun performSmartDeltaSync(parsedChannels: List<ChannelEntity>) = withContext(Dispatchers.IO) {
         if (parsedChannels.isEmpty()) return@withContext
 
-        // Get all current categories to look up their names
-        val categoryMap = dao.getAllCategories().first().associate { it.id to it.name }
+        val db = AppDatabase.getDatabase(context)
+        db.withTransaction {
+            // Get all current categories to look up their names
+            val categoryMap = dao.getAllCategories().first().associate { it.id to it.name }
 
-        // Group parsed channels by their normalized name
-        val parsedGrouped = parsedChannels.groupBy { ChannelNameNormalizer.sanitizeChannelName(it.name).lowercase() }
+            // Group parsed channels by their normalized name
+            val parsedGrouped = parsedChannels.groupBy { ChannelNameNormalizer.sanitizeChannelName(it.name).lowercase() }
 
-        // Get all current channels in the database
-        val existingChannels = dao.getAllChannels().first()
+            // Get all current channels in the database
+            val existingChannels = dao.getAllChannels().first()
 
-        // Map existing channels by normalized base name
-        val existingByNormalizedName = existingChannels.associateBy { ChannelNameNormalizer.sanitizeChannelName(it.name).lowercase() }
+            // Map existing channels by normalized base name
+            val existingByNormalizedName = existingChannels.associateBy { ChannelNameNormalizer.sanitizeChannelName(it.name).lowercase() }
 
-        val toInsert = mutableListOf<ChannelEntity>()
-        val toUpdate = mutableListOf<ChannelEntity>()
+            val toInsert = mutableListOf<ChannelEntity>()
+            val toUpdate = mutableListOf<ChannelEntity>()
 
-        // Keep track of which categories were updated in this sync
-        val updatedCategoryIds = parsedChannels.map { it.categoryId }.toSet()
+            // Keep track of which categories were updated in this sync
+            val updatedCategoryIds = parsedChannels.map { it.categoryId }.toSet()
 
-        // Keep track of all updated/parsed stream URLs to identify dropped/broken ones
-        val parsedStreamUrls = parsedChannels.map { it.streamUrl }.toSet()
+            // Keep track of all updated/parsed stream URLs to identify dropped/broken ones
+            val parsedStreamUrls = parsedChannels.map { it.streamUrl }.toSet()
 
-        for ((normalizedName, channelsInGroup) in parsedGrouped) {
-            val existing = existingByNormalizedName[normalizedName]
+            for ((normalizedName, channelsInGroup) in parsedGrouped) {
+                val existing = existingByNormalizedName[normalizedName]
 
-            val bestChannelForCategory = channelsInGroup.firstOrNull { ch ->
-                val catName = categoryMap[ch.categoryId] ?: ""
-                catName.isNotBlank() && !catName.equals("BDIX IPTV", ignoreCase = true) && !catName.equals("General", ignoreCase = true)
-            } ?: channelsInGroup.first()
+                val bestChannelForCategory = channelsInGroup.firstOrNull { ch ->
+                    val catName = categoryMap[ch.categoryId] ?: ""
+                    catName.isNotBlank() && !catName.equals("BDIX IPTV", ignoreCase = true) && !catName.equals("General", ignoreCase = true)
+                } ?: channelsInGroup.first()
 
-            if (existing != null) {
-                // Build a prioritized list of playback sources
-                val updatedSources = mutableListOf<PlaybackSource>()
-                
-                // 1. Add all newly parsed sources from this sync at the very front as prioritized sources
-                channelsInGroup.forEachIndexed { index, ch ->
-                    updatedSources.add(PlaybackSource(ch.streamUrl, "Source ${index + 1}", false))
-                }
-                
-                // 2. Append any non-duplicate legacy sources from the database as backup sources
-                val existingSources = existing.playbackSources.toMutableList()
-                if (existingSources.isEmpty() && existing.streamUrl.isNotBlank()) {
-                    existingSources.add(PlaybackSource(existing.streamUrl, "Source 1", existing.isBroken))
-                }
-                
-                var sourceCounter = updatedSources.size + 1
-                existingSources.forEach { oldSrc ->
-                    if (updatedSources.none { it.url == oldSrc.url }) {
-                        updatedSources.add(oldSrc.copy(name = "Backup Source ${sourceCounter++}"))
+                if (existing != null) {
+                    // Build a prioritized list of playback sources
+                    val updatedSources = mutableListOf<PlaybackSource>()
+                    
+                    // 1. Add all newly parsed sources from this sync at the very front as prioritized sources
+                    channelsInGroup.forEachIndexed { index, ch ->
+                        updatedSources.add(PlaybackSource(ch.streamUrl, "Source ${index + 1}", false))
                     }
-                }
-
-                // The primary streamUrl is always the first parsed streamUrl from the latest sync
-                val primaryStreamUrl = channelsInGroup.first().streamUrl
-
-                val updated = existing.copy(
-                    categoryId = bestChannelForCategory.categoryId, // Ensure channel category is correctly mapped/updated!
-                    category = bestChannelForCategory.category.ifEmpty { existing.category },
-                    logoUrl = bestChannelForCategory.logoUrl.ifEmpty { existing.logoUrl },
-                    description = bestChannelForCategory.description.ifEmpty { existing.description },
-                    tvgId = bestChannelForCategory.tvgId.ifEmpty { existing.tvgId },
-                    tvgName = bestChannelForCategory.tvgName.ifEmpty { existing.tvgName },
-                    isBroken = false, // Got a fresh update from the M3U, so mark active
-                    lastChecked = System.currentTimeMillis(),
-                    streamUrl = primaryStreamUrl,
-                    playbackSources = updatedSources
-                )
-                toUpdate.add(updated)
-            } else {
-                // Completely new channel group
-                val representative = bestChannelForCategory
-                val sources = channelsInGroup.mapIndexed { index, ch ->
-                    PlaybackSource(ch.streamUrl, "Source ${index + 1}", false)
-                }
-
-                val newChannel = representative.copy(
-                    playbackSources = sources,
-                    streamUrl = sources.firstOrNull()?.url ?: representative.streamUrl,
-                    isBroken = false,
-                    lastChecked = System.currentTimeMillis()
-                )
-                toInsert.add(newChannel)
-            }
-        }
-
-        // 4. Handle dropped sources / broken status for updated categories
-        for (existing in existingChannels) {
-            if (existing.categoryId in updatedCategoryIds) {
-                val existingSources = existing.playbackSources.toMutableList()
-                if (existingSources.isEmpty() && existing.streamUrl.isNotBlank()) {
-                    existingSources.add(PlaybackSource(existing.streamUrl, "Source 1", existing.isBroken))
-                }
-
-                var modified = false
-                val updatedSources = existingSources.map { source ->
-                    if (!parsedStreamUrls.contains(source.url)) {
-                        modified = true
-                        source.copy(isBroken = true)
-                    } else {
-                        source
+                    
+                    // 2. Append any non-duplicate legacy sources from the database as backup sources
+                    val existingSources = existing.playbackSources.toMutableList()
+                    if (existingSources.isEmpty() && existing.streamUrl.isNotBlank()) {
+                        existingSources.add(PlaybackSource(existing.streamUrl, "Source 1", existing.isBroken))
                     }
-                }
+                    
+                    var sourceCounter = updatedSources.size + 1
+                    existingSources.forEach { oldSrc ->
+                        if (updatedSources.none { it.url == oldSrc.url }) {
+                            updatedSources.add(oldSrc.copy(name = "Backup Source ${sourceCounter++}"))
+                        }
+                    }
 
-                if (modified) {
-                    val allBroken = updatedSources.all { it.isBroken }
-                    val updatedChannel = existing.copy(
-                        playbackSources = updatedSources,
-                        isBroken = allBroken,
+                    // The primary streamUrl is always the first parsed streamUrl from the latest sync
+                    val primaryStreamUrl = channelsInGroup.first().streamUrl
+
+                    val updated = existing.copy(
+                        categoryId = bestChannelForCategory.categoryId, // Ensure channel category is correctly mapped/updated!
+                        category = bestChannelForCategory.category.ifEmpty { existing.category },
+                        logoUrl = bestChannelForCategory.logoUrl.ifEmpty { existing.logoUrl },
+                        description = bestChannelForCategory.description.ifEmpty { existing.description },
+                        tvgId = bestChannelForCategory.tvgId.ifEmpty { existing.tvgId },
+                        tvgName = bestChannelForCategory.tvgName.ifEmpty { existing.tvgName },
+                        isBroken = false, // Got a fresh update from the M3U, so mark active
+                        lastChecked = System.currentTimeMillis(),
+                        streamUrl = primaryStreamUrl,
+                        playbackSources = updatedSources
+                    )
+                    toUpdate.add(updated)
+                } else {
+                    // Completely new channel group
+                    val representative = bestChannelForCategory
+                    val sources = channelsInGroup.mapIndexed { index, ch ->
+                        PlaybackSource(ch.streamUrl, "Source ${index + 1}", false)
+                    }
+
+                    val newChannel = representative.copy(
+                        playbackSources = sources,
+                        streamUrl = sources.firstOrNull()?.url ?: representative.streamUrl,
+                        isBroken = false,
                         lastChecked = System.currentTimeMillis()
                     )
-                    val index = toUpdate.indexOfFirst { it.id == existing.id }
-                    if (index != -1) {
-                        toUpdate[index] = toUpdate[index].copy(
+                    toInsert.add(newChannel)
+                }
+            }
+
+            // 4. Handle dropped sources / broken status for updated playlists (to avoid cross-playlist category interference)
+            val updatedPlaylistUrls = parsedChannels.map { it.playlistUrl }.filter { it.isNotEmpty() }.toSet()
+            for (existing in existingChannels) {
+                if (existing.playlistUrl.isNotEmpty() && existing.playlistUrl in updatedPlaylistUrls) {
+                    val existingSources = existing.playbackSources.toMutableList()
+                    if (existingSources.isEmpty() && existing.streamUrl.isNotBlank()) {
+                        existingSources.add(PlaybackSource(existing.streamUrl, "Source 1", existing.isBroken))
+                    }
+
+                    var modified = false
+                    val updatedSources = existingSources.map { source ->
+                        if (!parsedStreamUrls.contains(source.url)) {
+                            modified = true
+                            source.copy(isBroken = true)
+                        } else {
+                            source
+                        }
+                    }
+
+                    if (modified) {
+                        val allBroken = updatedSources.all { it.isBroken }
+                        val updatedChannel = existing.copy(
                             playbackSources = updatedSources,
-                            isBroken = allBroken
+                            isBroken = allBroken,
+                            lastChecked = System.currentTimeMillis()
                         )
-                    } else {
-                        toUpdate.add(updatedChannel)
+                        val index = toUpdate.indexOfFirst { it.id == existing.id }
+                        if (index != -1) {
+                            toUpdate[index] = toUpdate[index].copy(
+                                playbackSources = updatedSources,
+                                isBroken = allBroken
+                            )
+                        } else {
+                            toUpdate.add(updatedChannel)
+                        }
                     }
                 }
             }
-        }
 
-        // Perform updates and insertions in chunks/batches
-        if (toInsert.isNotEmpty()) {
-            toInsert.chunked(250).forEach { chunk ->
-                dao.insertChannels(chunk)
+            // Perform updates and insertions in chunks/batches
+            if (toInsert.isNotEmpty()) {
+                toInsert.chunked(250).forEach { chunk ->
+                    dao.insertChannels(chunk)
+                }
             }
-        }
-        if (toUpdate.isNotEmpty()) {
-            toUpdate.chunked(250).forEach { chunk ->
-                dao.updateChannels(chunk)
+            if (toUpdate.isNotEmpty()) {
+                toUpdate.chunked(250).forEach { chunk ->
+                    dao.updateChannels(chunk)
+                }
             }
-        }
 
-        // Clean up stale channels (channels that exist in the DB but were not part of this sync session)
-        val syncedPlaylistUrls = parsedChannels.map { it.playlistUrl }.filter { it.isNotBlank() }.toSet()
-        val updatedIds = toUpdate.map { it.id }.toSet()
-        val staleChannels = existingChannels.filter { it.playlistUrl in syncedPlaylistUrls && it.playlistUrl.isNotBlank() && it.id !in updatedIds }
-        if (staleChannels.isNotEmpty()) {
-            staleChannels.chunked(250).forEach { chunk ->
-                dao.deleteChannels(chunk)
+            // Clean up stale channels (channels that exist in the DB but were not part of this sync session)
+            val syncedPlaylistUrls = parsedChannels.map { it.playlistUrl }.filter { it.isNotBlank() }.toSet()
+            val updatedIds = toUpdate.map { it.id }.toSet()
+            val staleChannels = existingChannels.filter { it.playlistUrl in syncedPlaylistUrls && it.playlistUrl.isNotBlank() && it.id !in updatedIds }
+            if (staleChannels.isNotEmpty()) {
+                staleChannels.chunked(250).forEach { chunk ->
+                    dao.deleteChannels(chunk)
+                }
             }
-        }
 
-        // Clean up any empty categories
-        val remainingChannels = dao.getAllChannels().first()
-        val activeCategoryIds = remainingChannels.map { it.categoryId }.toSet()
-        val allCategories = dao.getAllCategories().first()
-        val emptyCategories = allCategories.filter { it.id !in activeCategoryIds }
-        if (emptyCategories.isNotEmpty()) {
-            emptyCategories.forEach { cat ->
-                dao.deleteCategory(cat)
+            // Clean up any empty categories
+            val remainingChannels = dao.getAllChannels().first()
+            val activeCategoryIds = remainingChannels.map { it.categoryId }.toSet()
+            val allCategories = dao.getAllCategories().first()
+            val emptyCategories = allCategories.filter { it.id !in activeCategoryIds }
+            if (emptyCategories.isNotEmpty()) {
+                emptyCategories.forEach { cat ->
+                    dao.deleteCategory(cat)
+                }
             }
         }
     }
@@ -427,70 +432,69 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             val tempCategories = existingCategories.associate { it.name to it.id }.toMutableMap()
 
             val existingChannels = dao.getAllChannels().first()
+            val forceSync = force || existingChannels.isEmpty()
             val parsedStreamUrlsInSession = mutableSetOf<String>()
 
             val channelsToInsert = mutableListOf<ChannelEntity>()
             val maxChannels = 3000 // Increased limit to hold categorised lists comfortably
 
-            val isDefaultOrInternal = m3uUrl == "https://iptv-org.github.io/iptv/index.m3u" ||
-                                     m3uUrl == "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u" ||
-                                     m3uUrl.isBlank() ||
-                                     m3uUrl.equals("all", ignoreCase = true) ||
-                                     m3uUrl.equals("default", ignoreCase = true)
-
-            if (isDefaultOrInternal) {
-                for ((categoryName, url) in CATEGORIZED_M3U_MAP) {
-                    try {
-                        val normalizedUrl = normalizeUrl(url)
-                        val modified = downloadAndParseM3uContent(
-                            urlStr = normalizedUrl,
-                            tempCategories = tempCategories,
-                            channelsToInsert = channelsToInsert,
-                            maxChannels = maxChannels,
-                            isSubPlaylist = false,
-                            categoryOverride = categoryName,
-                            parsedStreamUrlsInSession = parsedStreamUrlsInSession,
-                            playlistUrl = normalizedUrl,
-                            force = force
-                        )
-                        if (modified) {
-                            anyModified = true
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
+            val rawUrls = m3uUrl.split(Regex("[,;\\n\\r]+")).map { it.trim() }.filter { it.isNotEmpty() }
+            val targetUrls = if (rawUrls.isEmpty()) {
+                listOf("default")
             } else {
-                // Support multiple URLs separated by commas, semicolons, or newlines
-                val urls = m3uUrl.split(Regex("[,;\\n\\r]+"))
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() && (it.startsWith("http://") || it.startsWith("https://")) }
+                rawUrls
+            }
 
-                val targetUrls = if (urls.isEmpty()) {
-                    listOf("https://iptv-org.github.io/iptv/index.m3u")
-                } else {
-                    urls
-                }
+            for (url in targetUrls) {
+                val isDefaultOrInternalUrl = url.equals("default", ignoreCase = true) ||
+                                             url.equals("all", ignoreCase = true) ||
+                                             url.isBlank() ||
+                                             url == "https://iptv-org.github.io/iptv/index.m3u" ||
+                                             url == "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u"
 
-                for (url in targetUrls) {
-                    try {
-                        val normalizedUrl = normalizeUrl(url)
-                        val modified = downloadAndParseM3uContent(
-                            urlStr = normalizedUrl,
-                            tempCategories = tempCategories,
-                            channelsToInsert = channelsToInsert,
-                            maxChannels = maxChannels,
-                            isSubPlaylist = false,
-                            categoryOverride = null,
-                            parsedStreamUrlsInSession = parsedStreamUrlsInSession,
-                            playlistUrl = normalizedUrl,
-                            force = force
-                        )
-                        if (modified) {
-                            anyModified = true
+                if (isDefaultOrInternalUrl) {
+                    for ((categoryName, categoryUrl) in CATEGORIZED_M3U_MAP) {
+                        try {
+                            val normalizedUrl = normalizeUrl(categoryUrl)
+                            val modified = downloadAndParseM3uContent(
+                                urlStr = normalizedUrl,
+                                tempCategories = tempCategories,
+                                channelsToInsert = channelsToInsert,
+                                maxChannels = maxChannels,
+                                isSubPlaylist = false,
+                                categoryOverride = categoryName,
+                                parsedStreamUrlsInSession = parsedStreamUrlsInSession,
+                                playlistUrl = normalizedUrl,
+                                force = forceSync
+                            )
+                            if (modified) {
+                                anyModified = true
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    }
+                } else {
+                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                        try {
+                            val normalizedUrl = normalizeUrl(url)
+                            val modified = downloadAndParseM3uContent(
+                                urlStr = normalizedUrl,
+                                tempCategories = tempCategories,
+                                channelsToInsert = channelsToInsert,
+                                maxChannels = maxChannels,
+                                isSubPlaylist = false,
+                                categoryOverride = null,
+                                parsedStreamUrlsInSession = parsedStreamUrlsInSession,
+                                playlistUrl = normalizedUrl,
+                                force = forceSync
+                            )
+                            if (modified) {
+                                anyModified = true
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                     }
                 }
             }
@@ -605,8 +609,9 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                 }
 
                 val body = response.body ?: return@use false
-                val m3uText = body.string()
-                val parsedList = M3uParserService.parseM3uText(m3uText)
+                val parsedList = body.charStream().use { reader ->
+                    M3uParserService.parseM3uReader(reader)
+                }
 
                 val nestedUrls = mutableListOf<String>()
                 val rawChannels = mutableListOf<RawChannel>()

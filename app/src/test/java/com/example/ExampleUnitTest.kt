@@ -145,4 +145,31 @@ class ExampleUnitTest {
             }
         }
     }
+
+    @Test
+    fun testDoms9Playlists() {
+        val url1 = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8"
+        val url2 = "https://github.com/doms9/iptv/blob/default/M3U8/TV.m3u8"
+
+        val norm1 = com.example.data.M3uParserService.normalizeUrl(url1)
+        val norm2 = com.example.data.M3uParserService.normalizeUrl(url2)
+
+        println("Normalized events.m3u8: $norm1")
+        println("Normalized TV.m3u8: $norm2")
+
+        val content1 = com.example.data.M3uParserService.fetchM3uContent(url1)
+        val content2 = com.example.data.M3uParserService.fetchM3uContent(url2)
+
+        assertNotNull("events.m3u8 content should not be null", content1)
+        assertNotNull("TV.m3u8 content should not be null", content2)
+
+        val channels1 = com.example.data.M3uParserService.parseM3uText(content1!!)
+        val channels2 = com.example.data.M3uParserService.parseM3uText(content2!!)
+
+        println("events.m3u8 parsed channels count: ${channels1.size}")
+        println("TV.m3u8 parsed channels count: ${channels2.size}")
+
+        assertTrue("events.m3u8 channels should not be empty", channels1.isNotEmpty())
+        assertTrue("TV.m3u8 channels should not be empty", channels2.isNotEmpty())
+    }
 }

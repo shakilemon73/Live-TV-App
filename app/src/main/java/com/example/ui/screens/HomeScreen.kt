@@ -1124,8 +1124,130 @@ fun HomeScreen(
                             }
                         }
 
+                        val (eventsToHighlight, mainGridList) = if (searchQuery.isEmpty() && !showFavoritesOnly) {
+                            val selectedCategoryName = categoryMap[selectedCategoryId] ?: ""
+                            if (selectedCategoryName.trim().lowercase().contains("live event")) {
+                                Pair(emptyList<GroupedChannel>(), listToDisplay)
+                            } else {
+                                val evs = listToDisplay.filter {
+                                    val catName = categoryMap[it.categoryId] ?: ""
+                                    catName.trim().lowercase().contains("live event")
+                                }
+                                val regulars = remainingChannels.filter {
+                                    val catName = categoryMap[it.categoryId] ?: ""
+                                    !catName.trim().lowercase().contains("live event")
+                                }
+                                Pair(evs, regulars)
+                            }
+                        } else {
+                            Pair(emptyList<GroupedChannel>(), listToDisplay)
+                        }
+
+                        // LIVE EVENTS SECTION (Elite Horizontal Slider for Live Sports & Upcoming Events)
+                        if (eventsToHighlight.isNotEmpty()) {
+                            item(
+                                span = { GridItemSpan(maxLineSpan) },
+                                key = "live_events_row_item",
+                                contentType = "live_events_slider"
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 16.dp, top = 8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(Color(0xFFE53935), CircleShape)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "⚡ UPCOMING & ACTIVE LIVE EVENTS",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color.White,
+                                            letterSpacing = 1.sp
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    LazyRow(
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        contentPadding = PaddingValues(vertical = 4.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        items(
+                                            items = eventsToHighlight,
+                                            key = { "event_${it.name}" },
+                                            contentType = { "live_event_card" }
+                                        ) { groupedChannel ->
+                                            Card(
+                                                shape = RoundedCornerShape(16.dp),
+                                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                                                colors = CardDefaults.cardColors(containerColor = cardBg),
+                                                modifier = Modifier
+                                                    .width(190.dp)
+                                                    .clickable { onCardClick(groupedChannel) }
+                                                    .testTag("live_event_${groupedChannel.name}")
+                                            ) {
+                                                Column(modifier = Modifier.padding(10.dp)) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(85.dp)
+                                                            .clip(RoundedCornerShape(10.dp))
+                                                            .background(Color.Black.copy(alpha = 0.3f))
+                                                    ) {
+                                                        SubcomposeAsyncImage(
+                                                            model = groupedChannel.logoUrl,
+                                                            contentDescription = groupedChannel.name,
+                                                            contentScale = ContentScale.Fit,
+                                                            modifier = Modifier.fillMaxSize().padding(6.dp),
+                                                            loading = {
+                                                                ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
+                                                            }
+                                                        )
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .align(Alignment.TopStart)
+                                                                .padding(6.dp)
+                                                                .background(Color(0xFFE53935), RoundedCornerShape(4.dp))
+                                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = "LIVE",
+                                                                color = Color.White,
+                                                                fontSize = 7.sp,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
+                                                    }
+                                                    Spacer(modifier = Modifier.height(6.dp))
+                                                    Text(
+                                                        text = groupedChannel.name,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color.White,
+                                                        maxLines = 2,
+                                                        minLines = 2,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        lineHeight = 15.sp
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                                }
+                            }
+                        }
+
                         // GRID OF CHANNELS (Using unique stable keys & contentType to enable smooth recycle/scrolling)
-                        val displayList = if (searchQuery.isNotEmpty() || showFavoritesOnly) listToDisplay else remainingChannels
+                        val displayList = if (searchQuery.isNotEmpty() || showFavoritesOnly) listToDisplay else mainGridList
                         items(
                             items = displayList,
                             key = { it.name },

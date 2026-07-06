@@ -44,24 +44,64 @@ class BackgroundSyncManager(
     suspend fun checkStreamUrl(streamUrl: String): Boolean = withContext(Dispatchers.IO) {
         if (streamUrl.isBlank()) return@withContext false
 
+        var cleanUrl = streamUrl
+        val customHeaders = mutableMapOf<String, String>()
+
+        if (streamUrl.contains("|")) {
+            try {
+                val parts = streamUrl.split("|", limit = 2)
+                cleanUrl = parts[0]
+                val headerParams = parts[1]
+                headerParams.split("&").forEach { param ->
+                    val kv = param.split("=", limit = 2)
+                    if (kv.size == 2) {
+                        val rawKey = kv[0].trim()
+                        val key = when (rawKey.lowercase()) {
+                            "http-referrer", "referrer", "referer" -> "Referer"
+                            "http-origin", "origin" -> "Origin"
+                            "http-user-agent", "user-agent", "http-useragent" -> "User-Agent"
+                            else -> rawKey
+                        }
+                        val rawValue = kv[1].trim()
+                        val value = try {
+                            java.net.URLDecoder.decode(rawValue, "UTF-8")
+                        } catch (e: Exception) {
+                            rawValue
+                        }
+                        if (key.isNotBlank() && value.isNotBlank()) {
+                            customHeaders[key] = value
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error parsing pipe-separated headers for stream check: $streamUrl", e)
+            }
+        }
+
         // 1. First, attempt a highly efficient HEAD request to save bandwidth
         try {
-            val headRequest = Request.Builder()
-                .url(streamUrl)
+            val headBuilder = Request.Builder()
+                .url(cleanUrl)
                 .head()
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                .build()
+            
+            if (!customHeaders.containsKey("User-Agent")) {
+                headBuilder.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            }
+            customHeaders.forEach { (k, v) ->
+                headBuilder.header(k, v)
+            }
+            val headRequest = headBuilder.build()
             
             streamCheckClient.newCall(headRequest).execute().use { response ->
                 if (response.isSuccessful || response.code in 200..399) {
                     val contentType = response.header("Content-Type")?.lowercase() ?: ""
-                    val isKnownStream = streamUrl.contains(".m3u8", ignoreCase = true) ||
-                                        streamUrl.contains(".mpd", ignoreCase = true) ||
-                                        streamUrl.contains(".ts", ignoreCase = true) ||
-                                        streamUrl.contains(".mp4", ignoreCase = true) ||
-                                        streamUrl.contains(".ism", ignoreCase = true) ||
-                                        streamUrl.startsWith("rtsp://", ignoreCase = true) ||
-                                        streamUrl.startsWith("rtsps://", ignoreCase = true)
+                    val isKnownStream = cleanUrl.contains(".m3u8", ignoreCase = true) ||
+                                        cleanUrl.contains(".mpd", ignoreCase = true) ||
+                                        cleanUrl.contains(".ts", ignoreCase = true) ||
+                                        cleanUrl.contains(".mp4", ignoreCase = true) ||
+                                        cleanUrl.contains(".ism", ignoreCase = true) ||
+                                        cleanUrl.startsWith("rtsp://", ignoreCase = true) ||
+                                        cleanUrl.startsWith("rtsps://", ignoreCase = true)
                     
                     // If content-type indicates an HTML landing/error page, we need to treat it with caution
                     if (contentType.contains("text/html") && !isKnownStream) {
@@ -77,23 +117,29 @@ class BackgroundSyncManager(
 
         // 2. Highly optimized GET request requesting only the first 1KB (avoiding downloading endless live streams)
         try {
-            val getRequest = Request.Builder()
-                .url(streamUrl)
+            val getBuilder = Request.Builder()
+                .url(cleanUrl)
                 .get()
                 .header("Range", "bytes=0-1024") // Ask for first 1KB only
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                .build()
+            
+            if (!customHeaders.containsKey("User-Agent")) {
+                getBuilder.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            }
+            customHeaders.forEach { (k, v) ->
+                getBuilder.header(k, v)
+            }
+            val getRequest = getBuilder.build()
             
             streamCheckClient.newCall(getRequest).execute().use { response ->
                 if (response.isSuccessful || response.code in 200..399) {
                     val contentType = response.header("Content-Type")?.lowercase() ?: ""
-                    val isKnownStream = streamUrl.contains(".m3u8", ignoreCase = true) ||
-                                        streamUrl.contains(".mpd", ignoreCase = true) ||
-                                        streamUrl.contains(".ts", ignoreCase = true) ||
-                                        streamUrl.contains(".mp4", ignoreCase = true) ||
-                                        streamUrl.contains(".ism", ignoreCase = true) ||
-                                        streamUrl.startsWith("rtsp://", ignoreCase = true) ||
-                                        streamUrl.startsWith("rtsps://", ignoreCase = true)
+                    val isKnownStream = cleanUrl.contains(".m3u8", ignoreCase = true) ||
+                                        cleanUrl.contains(".mpd", ignoreCase = true) ||
+                                        cleanUrl.contains(".ts", ignoreCase = true) ||
+                                        cleanUrl.contains(".mp4", ignoreCase = true) ||
+                                        cleanUrl.contains(".ism", ignoreCase = true) ||
+                                        cleanUrl.startsWith("rtsp://", ignoreCase = true) ||
+                                        cleanUrl.startsWith("rtsps://", ignoreCase = true)
                     
                     // Many ISPs redirect dead links to an HTML block or portal page. If text/html is found
                     // for an expected video stream, we treat it as dead/broken.
@@ -104,7 +150,7 @@ class BackgroundSyncManager(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "GET stream check failed for: $streamUrl, error: ${e.message}")
+            Log.e(TAG, "GET stream check failed for: $cleanUrl, error: ${e.message}")
         }
         return@withContext false
     }
