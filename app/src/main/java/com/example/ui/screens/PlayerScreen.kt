@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
@@ -76,6 +77,12 @@ fun PlayerScreen(
     onEnterPip: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val handleBack = remember(viewModel, onNavigateBack) {
+        { viewModel.handleBackNavigation(onNavigateBack) }
+    }
+    BackHandler {
+        handleBack()
+    }
     val selectedChannel by viewModel.selectedChannel.collectAsStateWithLifecycle()
     val currentStreamUrl by viewModel.currentStreamUrl.collectAsStateWithLifecycle()
     val currentStreamName by viewModel.currentStreamName.collectAsStateWithLifecycle()
@@ -413,7 +420,7 @@ fun PlayerScreen(
                 Text("No stream selected", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
-                    onClick = onNavigateBack,
+                    onClick = handleBack,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD0BCFF), contentColor = Color(0xFF381E72))
                 ) {
                     Text("Go Back")
@@ -689,7 +696,7 @@ fun PlayerScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     IconButton(
-                        onClick = onNavigateBack,
+                        onClick = handleBack,
                         modifier = Modifier
                             .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
                             .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50))

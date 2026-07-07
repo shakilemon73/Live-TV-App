@@ -27,6 +27,43 @@ class MainActivity : ComponentActivity() {
     private var navController: NavController? = null
     private var viewModel: ChannelViewModel? = null
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        
+        val playStream = intent.getBooleanExtra("com.example.extra.PLAY_STREAM", false)
+        if (playStream && viewModel != null && navController != null) {
+            val title = intent.getStringExtra("com.example.extra.EVENT_TITLE") ?: ""
+            val category = intent.getStringExtra("com.example.extra.EVENT_CATEGORY") ?: "Live Events"
+            val logo = intent.getStringExtra("com.example.extra.EVENT_LOGO") ?: ""
+            val streamUrl = intent.getStringExtra("com.example.extra.FEED_URL") ?: ""
+            val provider = intent.getStringExtra("com.example.extra.FEED_PROVIDER") ?: "Live Feed"
+            val language = intent.getStringExtra("com.example.extra.FEED_LANGUAGE") ?: "Default"
+            
+            if (streamUrl.isNotEmpty()) {
+                val mockEvent = com.example.data.GroupedEvent(
+                    id = "notif_${streamUrl.hashCode()}",
+                    title = title,
+                    sportCategory = category,
+                    logoUrl = logo,
+                    feeds = listOf(
+                        com.example.data.EventFeed(
+                            rawName = title,
+                            provider = provider,
+                            language = language,
+                            streamUrl = streamUrl,
+                            logoUrl = logo
+                        )
+                    )
+                )
+                viewModel?.playLiveEventFeed(mockEvent, mockEvent.feeds.first())
+                navController?.navigate("player") {
+                    popUpTo("home")
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -41,14 +78,47 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     val controller = rememberNavController()
-                    LaunchedEffect(controller) {
-                        navController = controller
-                    }
-
                     val vm: ChannelViewModel = viewModel(
                         factory = ChannelViewModelFactory(application)
                     )
                     viewModel = vm
+
+                    LaunchedEffect(controller) {
+                        navController = controller
+                        
+                        // Handle cold start notification playback trigger
+                        val playStream = intent?.getBooleanExtra("com.example.extra.PLAY_STREAM", false) ?: false
+                        if (playStream) {
+                            val title = intent?.getStringExtra("com.example.extra.EVENT_TITLE") ?: ""
+                            val category = intent?.getStringExtra("com.example.extra.EVENT_CATEGORY") ?: "Live Events"
+                            val logo = intent?.getStringExtra("com.example.extra.EVENT_LOGO") ?: ""
+                            val streamUrl = intent?.getStringExtra("com.example.extra.FEED_URL") ?: ""
+                            val provider = intent?.getStringExtra("com.example.extra.FEED_PROVIDER") ?: "Live Feed"
+                            val language = intent?.getStringExtra("com.example.extra.FEED_LANGUAGE") ?: "Default"
+                            
+                            if (streamUrl.isNotEmpty()) {
+                                val mockEvent = com.example.data.GroupedEvent(
+                                    id = "notif_${streamUrl.hashCode()}",
+                                    title = title,
+                                    sportCategory = category,
+                                    logoUrl = logo,
+                                    feeds = listOf(
+                                        com.example.data.EventFeed(
+                                            rawName = title,
+                                            provider = provider,
+                                            language = language,
+                                            streamUrl = streamUrl,
+                                            logoUrl = logo
+                                        )
+                                    )
+                                )
+                                vm.playLiveEventFeed(mockEvent, mockEvent.feeds.first())
+                                controller.navigate("player") {
+                                    popUpTo("home")
+                                }
+                            }
+                        }
+                    }
 
                     NavHost(
                         navController = controller,

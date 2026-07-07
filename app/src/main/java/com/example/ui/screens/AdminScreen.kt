@@ -51,7 +51,7 @@ fun AdminScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
 
     var selectedTab by remember { mutableStateOf(0) }
-    val tabs = listOf("Channels", "Categories", "Cloud Sync")
+    val tabs = listOf("Channels", "Categories", "Cloud Sync", "Debug Console")
 
     // Dynamic coloring matching home screen
     val darkBg = Color(0xFF1C1B1F)
@@ -372,6 +372,14 @@ fun AdminScreen(
                 }
                 2 -> {
                     CloudSyncSettingsView(
+                        viewModel = viewModel,
+                        cardBg = cardBg,
+                        accentColor = accentColor,
+                        onPurpleColor = onPurpleColor
+                    )
+                }
+                3 -> {
+                    DebugConsoleView(
                         viewModel = viewModel,
                         cardBg = cardBg,
                         accentColor = accentColor,
@@ -1031,6 +1039,14 @@ fun CloudSyncSettingsView(
                         border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
                     )
                     AssistChip(
+                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/base.m3u8" },
+                        label = { Text("Doms9 Base", fontSize = 10.sp, color = Color.White) },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color.White.copy(alpha = 0.05f)
+                        ),
+                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
+                    )
+                    AssistChip(
                         onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8" },
                         label = { Text("Doms9 US TV", fontSize = 10.sp, color = Color.White) },
                         colors = AssistChipDefaults.assistChipColors(
@@ -1041,6 +1057,14 @@ fun CloudSyncSettingsView(
                     AssistChip(
                         onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8" },
                         label = { Text("Doms9 Events", fontSize = 10.sp, color = Color.White) },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = Color.White.copy(alpha = 0.05f)
+                        ),
+                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
+                    )
+                    AssistChip(
+                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/base.m3u8, https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8" },
+                        label = { Text("Doms9 Merged (Base + TV)", fontSize = 10.sp, color = Color.White) },
                         colors = AssistChipDefaults.assistChipColors(
                             containerColor = Color.White.copy(alpha = 0.05f)
                         ),
@@ -1309,5 +1333,264 @@ fun CloudSyncSettingsView(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun DebugConsoleView(
+    viewModel: ChannelViewModel,
+    cardBg: Color,
+    accentColor: Color,
+    onPurpleColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val logs by com.example.data.StreamLogManager.logs.collectAsStateWithLifecycle()
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    var selectedFilter by remember { mutableStateOf("All") }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredLogs = remember(logs, selectedFilter, searchQuery) {
+        logs.filter { log ->
+            val matchesFilter = selectedFilter == "All" || log.type.equals(selectedFilter, ignoreCase = true)
+            val matchesSearch = searchQuery.isBlank() ||
+                    log.targetName.contains(searchQuery, ignoreCase = true) ||
+                    log.url.contains(searchQuery, ignoreCase = true) ||
+                    log.errorMessage.contains(searchQuery, ignoreCase = true)
+            matchesFilter && matchesSearch
+        }
+    }
+
+    val totalCount = logs.size
+    val playbackCount = logs.count { it.type.equals("Playback", ignoreCase = true) }
+    val verificationCount = logs.count { it.type.equals("Verification", ignoreCase = true) }
+    val fetchCount = logs.count { it.type.equals("Playlist Fetch", ignoreCase = true) }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                label = { Text("Search logs...", color = Color.Gray) },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.Gray) },
+                trailingIcon = if (searchQuery.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.Gray)
+                        }
+                    }
+                } else null,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = accentColor,
+                    unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
+                    focusedLabelColor = accentColor,
+                    unfocusedLabelColor = Color.Gray,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+
+            Button(
+                onClick = { com.example.data.StreamLogManager.clearLogs() },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFBA1A1A),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.testTag("clear_logs_button")
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = "Clear Logs", modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Clear", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceAround
+            ) {
+                StatItem(label = "Total", value = totalCount.toString(), color = Color.White)
+                StatItem(label = "Playback", value = playbackCount.toString(), color = Color(0xFFF2B8B5))
+                StatItem(label = "Verify", value = verificationCount.toString(), color = Color(0xFFFFD494))
+                StatItem(label = "Fetch", value = fetchCount.toString(), color = Color(0xFF94D4FF))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        val filters = listOf("All", "Playback", "Verification", "Playlist Fetch")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            filters.forEach { filter ->
+                val isSelected = selectedFilter == filter
+                InputChip(
+                    selected = isSelected,
+                    onClick = { selectedFilter = filter },
+                    label = { Text(filter) },
+                    colors = InputChipDefaults.inputChipColors(
+                        selectedContainerColor = accentColor,
+                        selectedLabelColor = onPurpleColor,
+                        containerColor = cardBg,
+                        labelColor = Color.White
+                    ),
+                    border = BorderStroke(1.dp, if (isSelected) accentColor else Color.White.copy(alpha = 0.12f))
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (filteredLogs.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = "No Logs",
+                        tint = Color.Gray.copy(alpha = 0.5f),
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("No stream error logs found", color = Color.Gray, fontSize = 14.sp)
+                }
+            }
+        } else {
+            val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()) }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(filteredLogs, key = { it.id }) { log ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = cardBg),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val (badgeColor, badgeText) = when (log.type.lowercase()) {
+                                    "playback" -> Color(0xFFF2B8B5) to "PLAYBACK"
+                                    "verification" -> Color(0xFFFFD494) to "VERIFY"
+                                    "playlist fetch" -> Color(0xFF94D4FF) to "FETCH"
+                                    else -> Color.Gray to log.type.uppercase()
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .background(badgeColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                        .border(1.dp, badgeColor.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = badgeText,
+                                        color = badgeColor,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                Text(
+                                    text = sdf.format(java.util.Date(log.timestamp)),
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Text(
+                                text = log.targetName,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Text(
+                                text = log.errorMessage,
+                                fontSize = 12.sp,
+                                color = Color(0xFFF2B8B5),
+                                fontWeight = FontWeight.Medium
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = log.url,
+                                    fontSize = 11.sp,
+                                    color = Color.Gray,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                IconButton(
+                                    onClick = {
+                                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(log.url))
+                                        android.widget.Toast.makeText(context, "URL Copied!", android.widget.Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = "Copy URL",
+                                        tint = accentColor,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StatItem(label: String, value: String, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = value, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = color)
+        Text(text = label, fontSize = 11.sp, color = Color.Gray)
     }
 }

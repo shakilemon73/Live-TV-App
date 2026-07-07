@@ -59,6 +59,37 @@ class ChannelViewModel(
     val favoriteChannels: StateFlow<List<ChannelEntity>> = repository.favoriteChannels
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val interestedLiveEvents: StateFlow<List<com.example.data.InterestedEventEntity>> = repository.interestedLiveEvents
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // --- Persisted UI States ---
+    private val _currentTab = MutableStateFlow(0)
+    val currentTab: StateFlow<Int> = _currentTab.asStateFlow()
+
+    private val _eventsScrollToTopTrigger = MutableStateFlow(0)
+    val eventsScrollToTopTrigger: StateFlow<Int> = _eventsScrollToTopTrigger.asStateFlow()
+
+    private var isComingFromLiveEvents = false
+
+    fun setComingFromLiveEvents(fromEvents: Boolean) {
+        isComingFromLiveEvents = fromEvents
+    }
+
+    fun handleBackNavigation(onBack: () -> Unit) {
+        if (isComingFromLiveEvents) {
+            _currentTab.value = 3
+        }
+        onBack()
+    }
+
+    fun setCurrentTab(tabIndex: Int) {
+        _currentTab.value = tabIndex
+    }
+
+    fun triggerEventsScrollToTop() {
+        _eventsScrollToTopTrigger.value += 1
+    }
+
     // --- Filter / UI States ---
     private val _localIsLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = combine(
@@ -362,6 +393,18 @@ class ChannelViewModel(
         }
 
         viewModelScope.launch {
+            // Load cached live events for instant startup display
+            launch(Dispatchers.IO) {
+                try {
+                    val cached = repository.getCachedLiveEvents().map { it.toGroupedEvent() }
+                    if (cached.isNotEmpty()) {
+                        _fetchedLiveEvents.value = cached
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
             _localIsLoading.value = true
             // Seed defaults on start if DB is empty
             repository.seedDatabaseIfEmpty()
@@ -573,7 +616,16 @@ class ChannelViewModel(
         }
     }
 
+    private var lastChannelList: List<ChannelEntity>? = null
+    private var lastGroupedList: List<GroupedChannel>? = null
+
     fun groupChannels(channelList: List<ChannelEntity>): List<GroupedChannel> {
+        synchronized(this) {
+            if (channelList === lastChannelList || (lastChannelList != null && channelList == lastChannelList)) {
+                return lastGroupedList ?: emptyList()
+            }
+        }
+
         val work = {
             val groupedMap = mutableMapOf<String, MutableList<ChannelEntity>>()
             for (channel in channelList) {
@@ -639,11 +691,12 @@ class ChannelViewModel(
             }
         }
 
-        return if (channelList.size > 200 && android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            kotlinx.coroutines.runBlocking(Dispatchers.Default) { work() }
-        } else {
-            work()
+        val result = work()
+        synchronized(this) {
+            lastChannelList = channelList
+            lastGroupedList = result
         }
+        return result
     }
 
     // --- Selection Setters ---
@@ -674,6 +727,7 @@ class ChannelViewModel(
     }
 
     fun selectChannel(channel: ChannelEntity?) {
+        isComingFromLiveEvents = false
         _selectedChannel.value = channel
         errorCountMap.clear()
         if (channel != null) {
@@ -720,6 +774,15 @@ class ChannelViewModel(
         viewModelScope.launch {
             val count = (errorCountMap[failedUrl] ?: 0) + 1
             errorCountMap[failedUrl] = count
+            
+            val channel = channels.value.find { it.id == channelId }
+            val chName = channel?.name ?: "Unknown Channel"
+            com.example.data.StreamLogManager.logError(
+                type = "Playback",
+                targetName = chName,
+                url = failedUrl,
+                errorMessage = "Playback Connection Failure (consecutive: $count)"
+            )
             
             // Increment telemetry failures
             val failures = (channelFailuresMap[channelId] ?: 0) + 1
@@ -833,6 +896,102 @@ class ChannelViewModel(
             if (_localSyncStatusMessage.value == "Offline channel link auto-removed and skipped!") {
                 _localSyncStatusMessage.value = null
             }
+        }
+    }
+
+    // --- Live Events States ---
+    private val _fetchedLiveEvents = MutableStateFlow<List<com.example.data.GroupedEvent>>(emptyList())
+    
+    val liveEvents: StateFlow<List<com.example.data.GroupedEvent>> = combine(
+        _fetchedLiveEvents,
+        channels
+    ) { fetched, dbChannels ->
+        com.example.data.LiveEventParser.detectAndMergeSimilarEvents(fetched, dbChannels)
+    }.flowOn(Dispatchers.Default)
+     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _isEventsLoading = MutableStateFlow(false)
+    val isEventsLoading: StateFlow<Boolean> = _isEventsLoading.asStateFlow()
+
+    private val _eventsError = MutableStateFlow<String?>(null)
+    val eventsError: StateFlow<String?> = _eventsError.asStateFlow()
+
+    fun fetchLiveEvents(forceRefresh: Boolean = false) {
+        if (!forceRefresh && _fetchedLiveEvents.value.isNotEmpty()) return
+        
+        viewModelScope.launch {
+            _isEventsLoading.value = true
+            _eventsError.value = null
+            
+            val content = withContext(Dispatchers.IO) {
+                com.example.data.M3uParserService.fetchM3uContent("https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8")
+            }
+            
+            if (content != null) {
+                val (parsedList, grouped) = withContext(Dispatchers.Default) {
+                    val parsed = com.example.data.M3uParserService.parseM3uText(content)
+                    val grp = com.example.data.LiveEventParser.mapParsedChannelsToGroupedEvents(parsed)
+                    Pair(parsed, grp)
+                }
+                _fetchedLiveEvents.value = grouped
+                
+                // Save to Room cache
+                launch(Dispatchers.IO) {
+                    try {
+                        val cachedEntities = grouped.map { com.example.data.CachedLiveEventEntity.fromGroupedEvent(it) }
+                        repository.saveCachedLiveEvents(cachedEntities)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+
+                if (grouped.isEmpty() && liveEvents.value.isEmpty()) {
+                    _eventsError.value = "No live or upcoming events scheduled right now."
+                }
+            } else {
+                if (liveEvents.value.isEmpty()) {
+                    _eventsError.value = "Failed to load dynamic event schedule. Please verify your connection."
+                }
+            }
+            _isEventsLoading.value = false
+        }
+    }
+
+    fun playLiveEventFeed(event: com.example.data.GroupedEvent, feed: com.example.data.EventFeed) {
+        isComingFromLiveEvents = true
+        val tempChannel = ChannelEntity(
+            id = -Math.abs(feed.streamUrl.hashCode()), // Negative ID indicates temporary event stream
+            name = event.title,
+            streamUrl = feed.streamUrl,
+            logoUrl = feed.logoUrl.ifEmpty { event.logoUrl },
+            category = "Live Events: ${event.sportCategory}",
+            categoryId = -999,
+            description = "Live event stream of ${event.title} via ${feed.provider} (${feed.language})"
+        )
+        _selectedChannel.value = tempChannel
+        errorCountMap.clear()
+        _currentStreamUrl.value = feed.streamUrl
+        _currentStreamName.value = "${feed.provider} (${feed.language})"
+    }
+
+    fun scheduleEventReminder(event: com.example.data.GroupedEvent, delayMillis: Long) {
+        viewModelScope.launch {
+            val alertTime = System.currentTimeMillis() + delayMillis
+            val entity = com.example.data.InterestedEventEntity.fromGroupedEvent(event, alertTime)
+            repository.saveInterestedLiveEvent(entity)
+            com.example.data.LiveEventReminderWorker.scheduleReminder(getApplication(), event.id, delayMillis)
+            com.example.data.LiveEventReminderWorker.showInstantNotification(
+                getApplication(),
+                "Reminder Scheduled! 🔔",
+                "You will be notified when \"${event.title}\" is starting!"
+            )
+        }
+    }
+
+    fun cancelEventReminder(eventId: String) {
+        viewModelScope.launch {
+            repository.deleteInterestedLiveEventById(eventId)
+            com.example.data.LiveEventReminderWorker.cancelReminder(getApplication(), eventId)
         }
     }
 }

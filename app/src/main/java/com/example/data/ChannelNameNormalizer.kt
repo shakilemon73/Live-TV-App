@@ -45,6 +45,8 @@ object ChannelNameNormalizer {
     // Regex to collapse consecutive whitespaces into a single space
     private val MULTIPLE_WHITESPACES_REGEX = Regex("\\s+")
 
+    private val sanitizeCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     /**
      * Sanitizes a channel name by removing brackets, parentheses, quality tags, and server identifiers.
      * Retains casing but cleans up extra punctuation and spacing.
@@ -52,30 +54,32 @@ object ChannelNameNormalizer {
      * Example: "US: HBO HD [HEVC] (Backup)" -> "HBO"
      */
     fun sanitizeChannelName(name: String): String {
-        var clean = name
+        return sanitizeCache.getOrPut(name) {
+            var clean = name
 
-        // 1. Remove bracket details (e.g., "[HEVC]")
-        clean = BRACKETS_REGEX.replace(clean, " ")
+            // 1. Remove bracket details (e.g., "[HEVC]")
+            clean = BRACKETS_REGEX.replace(clean, " ")
 
-        // 2. Remove parentheses details (e.g., "(Backup)")
-        clean = PARENTHESES_REGEX.replace(clean, " ")
+            // 2. Remove parentheses details (e.g., "(Backup)")
+            clean = PARENTHESES_REGEX.replace(clean, " ")
 
-        // 3. Remove country prefix (e.g., "US:")
-        clean = COUNTRY_PREFIX_REGEX.replace(clean, " ")
+            // 3. Remove country prefix (e.g., "US:")
+            clean = COUNTRY_PREFIX_REGEX.replace(clean, " ")
 
-        // 4. Remove quality tags (e.g., "HD", "1080p")
-        clean = QUALITY_TAGS_REGEX.replace(clean, " ")
+            // 4. Remove quality tags (e.g., "HD", "1080p")
+            clean = QUALITY_TAGS_REGEX.replace(clean, " ")
 
-        // 5. Remove server identifiers (e.g., "Server 1", "Alt")
-        clean = SERVER_IDENTIFIERS_REGEX.replace(clean, " ")
+            // 5. Remove server identifiers (e.g., "Server 1", "Alt")
+            clean = SERVER_IDENTIFIERS_REGEX.replace(clean, " ")
 
-        // 6. Clean up trailing/leading punctuation
-        clean = CLEANUP_PUNCTUATION_REGEX.replace(clean, "")
+            // 6. Clean up trailing/leading punctuation
+            clean = CLEANUP_PUNCTUATION_REGEX.replace(clean, "")
 
-        // 7. Collapse consecutive spaces and trim
-        clean = MULTIPLE_WHITESPACES_REGEX.replace(clean, " ")
+            // 7. Collapse consecutive spaces and trim
+            clean = MULTIPLE_WHITESPACES_REGEX.replace(clean, " ")
 
-        return clean.trim()
+            clean.trim()
+        }
     }
 
     /**

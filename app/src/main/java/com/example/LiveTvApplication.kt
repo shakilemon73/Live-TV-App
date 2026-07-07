@@ -13,6 +13,7 @@ class LiveTvApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.example.data.StreamLogManager.init(this)
         database = AppDatabase.getDatabase(this)
         repository = LiveTvRepository(database.liveTvDao(), this)
         syncManager = BackgroundSyncManager(repository, this)

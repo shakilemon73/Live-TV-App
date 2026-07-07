@@ -39,7 +39,9 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             "Movies" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/movies.m3u",
             "Music" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/music.m3u",
             "Religious" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/religious.m3u",
-            "Sports & Football" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/sports_football.m3u"
+            "Sports & Football" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/sports_football.m3u",
+            "Doms9 Base" to "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/base.m3u8",
+            "Doms9 US TV" to "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8"
         )
     }
 
@@ -49,6 +51,36 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
     val activeChannels: Flow<List<ChannelEntity>> = dao.getActiveChannels()
     val favoriteChannels: Flow<List<ChannelEntity>> = dao.getFavoriteChannels()
     val allRecordings: Flow<List<RecordingEntity>> = dao.getAllRecordings()
+    val cachedLiveEvents: Flow<List<CachedLiveEventEntity>> = dao.getAllCachedLiveEventsFlow()
+    val interestedLiveEvents: Flow<List<InterestedEventEntity>> = dao.getAllInterestedEventsFlow()
+
+    suspend fun getCachedLiveEvents(): List<CachedLiveEventEntity> = withContext(Dispatchers.IO) {
+        dao.getAllCachedLiveEvents()
+    }
+
+    suspend fun saveCachedLiveEvents(events: List<CachedLiveEventEntity>) = withContext(Dispatchers.IO) {
+        dao.replaceCachedLiveEvents(events)
+    }
+
+    suspend fun getInterestedLiveEvents(): List<InterestedEventEntity> = withContext(Dispatchers.IO) {
+        dao.getAllInterestedEvents()
+    }
+
+    suspend fun getInterestedEventById(id: String): InterestedEventEntity? = withContext(Dispatchers.IO) {
+        dao.getInterestedEventById(id)
+    }
+
+    suspend fun saveInterestedLiveEvent(event: InterestedEventEntity) = withContext(Dispatchers.IO) {
+        dao.insertInterestedEvent(event)
+    }
+
+    suspend fun deleteInterestedLiveEventById(id: String) = withContext(Dispatchers.IO) {
+        dao.deleteInterestedEventById(id)
+    }
+
+    suspend fun updateInterestedEventNotified(id: String, isNotified: Boolean) = withContext(Dispatchers.IO) {
+        dao.updateInterestedEventNotified(id, isNotified)
+    }
 
     suspend fun insertRecording(recording: RecordingEntity): Long {
         return dao.insertRecording(recording)
@@ -598,7 +630,15 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                     return@use false
                 }
 
-                if (responseCode != 200) return@use false
+                if (responseCode != 200) {
+                    StreamLogManager.logError(
+                        type = "Playlist Fetch",
+                        targetName = categoryOverride ?: "M3U Playlist",
+                        url = urlStr,
+                        errorMessage = "HTTP Error $responseCode"
+                    )
+                    return@use false
+                }
 
                 if (!isSubPlaylist) {
                     val newEtag = response.header("ETag")
@@ -646,13 +686,8 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                     rawChannels.chunked(250).map { chunk ->
                         async {
                             chunk.map { raw ->
-                                val detectedGroup = ChannelClassifier.classify(raw.name, raw.group)
-                                val rawCategoryName = if (categoryOverride == "BDIX IPTV") {
-                                    if (detectedGroup == "General") "BDIX IPTV" else detectedGroup
-                                } else {
-                                    categoryOverride ?: detectedGroup
-                                }
-                                val categoryName = rawCategoryName.trim()
+                                val detectedGroup = ChannelClassifier.classify(raw.name, raw.group, categoryOverride)
+                                val categoryName = detectedGroup.trim()
                                 Triple(raw, categoryName, detectedGroup)
                             }
                         }
@@ -725,6 +760,12 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            StreamLogManager.logError(
+                type = "Playlist Fetch",
+                targetName = categoryOverride ?: "M3U Playlist",
+                url = urlStr,
+                errorMessage = e.localizedMessage ?: "Parsing/Network Error"
+            )
         }
         return false
     }

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,34 +21,50 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -96,8 +113,10 @@ fun HomeScreen(
     val streamCheckingProgress by viewModel.streamCheckingProgress.collectAsStateWithLifecycle()
     val streamCheckingStatus by viewModel.streamCheckingStatus.collectAsStateWithLifecycle()
     val filterBrokenChannels by viewModel.filterBrokenChannels.collectAsStateWithLifecycle()
+    val selectedChannel by viewModel.selectedChannel.collectAsStateWithLifecycle()
 
-    var currentTab by remember { mutableStateOf(0) } // 0 = Home, 1 = Categories, 2 = Favorites, 3 = Search
+    val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
     var showFavoritesOnly by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var favoritesSubTab by remember { mutableStateOf(0) } // 0 = Starred Feeds, 1 = Recorded Shows
@@ -105,16 +124,26 @@ fun HomeScreen(
     var showAdminOverride by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
-    BackHandler(enabled = showSettings || currentTab != 0) {
+    LaunchedEffect(currentTab) {
+        if (currentTab == 3) {
+            viewModel.fetchLiveEvents()
+        }
+    }
+
+    BackHandler(enabled = (showSettings || currentTab != 0)) {
         if (showSettings) {
             showSettings = false
         } else {
-            currentTab = 0
+            viewModel.setCurrentTab(0)
             viewModel.setSearchQuery("")
         }
     }
 
     val lazyGridState = rememberLazyGridState()
+    val categoriesGridState = rememberLazyGridState()
+    val favoritesGridState = rememberLazyGridState()
+    val searchGridState = rememberLazyGridState()
+    val eventsListState = rememberLazyListState()
     val isScrolling by remember {
         derivedStateOf { lazyGridState.isScrollInProgress }
     }
@@ -130,19 +159,12 @@ fun HomeScreen(
     
     // Highly efficient O(N) category counts map with O(1) lookup
     val categoryCounts = remember(allChannelsRaw, filterBrokenChannels) {
-        val work = {
-            val listToCount = if (filterBrokenChannels) {
-                allChannelsRaw.filter { !it.isBroken }
-            } else {
-                allChannelsRaw
-            }
-            listToCount.groupBy { it.categoryId }.mapValues { it.value.size }
-        }
-        if (allChannelsRaw.size > 200) {
-            kotlinx.coroutines.runBlocking(Dispatchers.Default) { work() }
+        val listToCount = if (filterBrokenChannels) {
+            allChannelsRaw.filter { !it.isBroken }
         } else {
-            work()
+            allChannelsRaw
         }
+        listToCount.groupBy { it.categoryId }.mapValues { it.value.size }
     }
     
     val totalActiveChannelsCount = remember(categoryCounts) { categoryCounts.values.sum() }
@@ -171,34 +193,27 @@ fun HomeScreen(
     }
 
     val processedCategories = remember(categories, categoryCounts, categorySearchQuery, categorySortMode, hideEmptyCategories) {
-        val work = {
-            categories
-                .filter { category ->
-                    val count = categoryCounts[category.id] ?: 0
-                    val matchesSearch = categorySearchQuery.isEmpty() || category.name.contains(categorySearchQuery, ignoreCase = true)
-                    val matchesEmpty = !hideEmptyCategories || count > 0
-                    matchesSearch && matchesEmpty
-                }
-                .sortedWith { c1, c2 ->
-                    val count1 = categoryCounts[c1.id] ?: 0
-                    val count2 = categoryCounts[c2.id] ?: 0
-                    when (categorySortMode) {
-                        0 -> {
-                            val countCompare = count2.compareTo(count1)
-                            if (countCompare != 0) countCompare else c1.name.compareTo(c2.name, ignoreCase = true)
-                        }
-                        1 -> {
-                            c1.name.compareTo(c2.name, ignoreCase = true)
-                        }
-                        else -> 0
+        categories
+            .filter { category ->
+                val count = categoryCounts[category.id] ?: 0
+                val matchesSearch = categorySearchQuery.isEmpty() || category.name.contains(categorySearchQuery, ignoreCase = true)
+                val matchesEmpty = !hideEmptyCategories || count > 0
+                matchesSearch && matchesEmpty
+            }
+            .sortedWith { c1, c2 ->
+                val count1 = categoryCounts[c1.id] ?: 0
+                val count2 = categoryCounts[c2.id] ?: 0
+                when (categorySortMode) {
+                    0 -> {
+                        val countCompare = count2.compareTo(count1)
+                        if (countCompare != 0) countCompare else c1.name.compareTo(c2.name, ignoreCase = true)
                     }
+                    1 -> {
+                        c1.name.compareTo(c2.name, ignoreCase = true)
+                    }
+                    else -> 0
                 }
-        }
-        if (categories.size > 200) {
-            kotlinx.coroutines.runBlocking(Dispatchers.Default) { work() }
-        } else {
-            work()
-        }
+            }
     }
 
     // Stable, remembered callback handlers to prevent layout recomposition during scroll
@@ -222,6 +237,23 @@ fun HomeScreen(
         }
     }
 
+    val showScrollToTop by remember {
+        derivedStateOf {
+            if (showSettings) {
+                false
+            } else {
+                when (currentTab) {
+                    0 -> lazyGridState.firstVisibleItemIndex > 2
+                    1 -> categoriesGridState.firstVisibleItemIndex > 2
+                    2 -> if (favoritesSubTab == 0) favoritesGridState.firstVisibleItemIndex > 2 else false
+                    3 -> eventsListState.firstVisibleItemIndex > 2
+                    4 -> searchGridState.firstVisibleItemIndex > 2
+                    else -> false
+                }
+            }
+        }
+    }
+
     // Visual theme variables
     val darkBg = Color(0xFF131215) // Deep luxury cinematic dark background
     val cardBg = Color(0xFF1E1C22) // Sleek Material dark surface
@@ -230,6 +262,39 @@ fun HomeScreen(
     val onPurpleColor = Color(0xFF381E72)
 
     Scaffold(
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = showScrollToTop,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                FloatingActionButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            when (currentTab) {
+                                0 -> lazyGridState.animateScrollToItem(0)
+                                1 -> categoriesGridState.animateScrollToItem(0)
+                                2 -> if (favoritesSubTab == 0) favoritesGridState.animateScrollToItem(0)
+                                3 -> eventsListState.animateScrollToItem(0)
+                                4 -> searchGridState.animateScrollToItem(0)
+                            }
+                        }
+                    },
+                    containerColor = accentColor,
+                    contentColor = onPurpleColor,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .padding(bottom = 76.dp)
+                        .testTag("scroll_to_top_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Scroll to top",
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+        },
         topBar = {
             Column(
                 modifier = Modifier
@@ -762,84 +827,216 @@ fun HomeScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 12.dp, top = 12.dp)
+                        .height(92.dp),
+                    contentAlignment = Alignment.BottomCenter
                 ) {
+                    // Glassmorphic Base Dock Surface with dynamic ambient glow shadow
                     Surface(
-                        color = Color(0xFF141218).copy(alpha = 0.92f), // Glassy ultra-dark premium background
+                        color = Color(0xFF100C1F).copy(alpha = 0.82f),
                         shape = RoundedCornerShape(28.dp),
                         border = BorderStroke(
                             1.dp,
                             Brush.verticalGradient(
                                 colors = listOf(
-                                    Color.White.copy(alpha = 0.12f),
-                                    Color.White.copy(alpha = 0.04f)
+                                    Color.White.copy(alpha = 0.18f),
+                                    Color.White.copy(alpha = 0.03f)
                                 )
                             )
                         ),
                         tonalElevation = 12.dp,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(72.dp)
+                            .shadow(
+                                elevation = 16.dp,
+                                shape = RoundedCornerShape(28.dp),
+                                clip = false,
+                                ambientColor = accentColor.copy(alpha = 0.5f),
+                                spotColor = accentColor.copy(alpha = 0.5f)
+                            )
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(72.dp)
-                                .padding(horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceAround,
+                                .fillMaxHeight()
+                                .padding(horizontal = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             FloatingBottomBarItem(
                                 selected = !showSettings && currentTab == 0,
                                 onClick = { 
                                     showSettings = false
-                                    currentTab = 0 
+                                    if (currentTab == 0) {
+                                        coroutineScope.launch { lazyGridState.animateScrollToItem(0) }
+                                    } else {
+                                        viewModel.setCurrentTab(0)
+                                    }
                                     viewModel.setSearchQuery("")
                                 },
-                                icon = Icons.Default.Home,
-                                selectedIcon = Icons.Default.Home,
+                                icon = Icons.Outlined.Home,
+                                selectedIcon = Icons.Filled.Home,
                                 label = "Home",
                                 accentColor = accentColor,
-                                modifier = Modifier.testTag("nav_home")
+                                modifier = Modifier.weight(1f).testTag("nav_home")
                             )
                             FloatingBottomBarItem(
                                 selected = !showSettings && currentTab == 1,
                                 onClick = { 
                                     showSettings = false
-                                    currentTab = 1 
+                                    if (currentTab == 1) {
+                                        coroutineScope.launch { categoryRowState.animateScrollToItem(0) }
+                                    } else {
+                                        viewModel.setCurrentTab(1)
+                                    }
                                     viewModel.setSearchQuery("")
                                 },
-                                icon = Icons.Default.Category,
-                                selectedIcon = Icons.Default.Category,
+                                icon = Icons.Outlined.Category,
+                                selectedIcon = Icons.Filled.Category,
                                 label = "Categories",
                                 accentColor = accentColor,
-                                modifier = Modifier.testTag("nav_categories")
+                                modifier = Modifier.weight(1f).testTag("nav_categories")
                             )
+                            
+                            // Perfectly proportioned central gap for the overlapping search button
+                            Spacer(modifier = Modifier.weight(1.2f))
+                            
                             FloatingBottomBarItem(
                                 selected = !showSettings && currentTab == 2,
                                 onClick = { 
                                     showSettings = false
-                                    currentTab = 2 
+                                    viewModel.setCurrentTab(2)
                                     viewModel.setSearchQuery("")
                                 },
-                                icon = Icons.Default.FavoriteBorder,
-                                selectedIcon = Icons.Default.Favorite,
+                                icon = Icons.Outlined.FavoriteBorder,
+                                selectedIcon = Icons.Filled.Favorite,
                                 label = "Favorites",
                                 accentColor = accentColor,
-                                modifier = Modifier.testTag("nav_favorites")
+                                modifier = Modifier.weight(1f).testTag("nav_favorites")
                             )
                             FloatingBottomBarItem(
                                 selected = !showSettings && currentTab == 3,
                                 onClick = { 
                                     showSettings = false
-                                    currentTab = 3 
+                                    if (currentTab == 3) {
+                                        viewModel.triggerEventsScrollToTop()
+                                    } else {
+                                        viewModel.setCurrentTab(3)
+                                    }
                                 },
-                                icon = Icons.Default.Search,
-                                selectedIcon = Icons.Default.Search,
-                                label = "Search",
+                                icon = Icons.Outlined.LiveTv,
+                                selectedIcon = Icons.Filled.LiveTv,
+                                label = "Events",
                                 accentColor = accentColor,
-                                modifier = Modifier.testTag("nav_search")
+                                hasLiveBadge = true,
+                                modifier = Modifier.weight(1f).testTag("nav_events")
                             )
                         }
+                    }
+                    
+                    // High-fidelity pulsing sonar ring behind the Floating Search FAB
+                    val searchSelected = !showSettings && currentTab == 4
+                    val pulseTransition = rememberInfiniteTransition(label = "pulseRing")
+                    val pulseRadius by pulseTransition.animateFloat(
+                        initialValue = 58f,
+                        targetValue = 82f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(1500, easing = LinearOutSlowInEasing),
+                            repeatMode = RepeatMode.Restart
+                        ),
+                        label = "pulseRadius"
+                    )
+                    val pulseAlpha by pulseTransition.animateFloat(
+                        initialValue = 0.45f,
+                        targetValue = 0.0f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(1500, easing = LinearOutSlowInEasing),
+                            repeatMode = RepeatMode.Restart
+                        ),
+                        label = "pulseAlpha"
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .offset(y = (31f - pulseRadius / 2f).dp)
+                            .size(pulseRadius.dp)
+                            .border(
+                                width = 1.2.dp,
+                                color = (if (searchSelected) accentColor else Color.White).copy(alpha = pulseAlpha),
+                                shape = CircleShape
+                            )
+                    )
+
+                    // Floating Circular Search button overlapping the bar perfectly
+                    val searchScale by animateFloatAsState(
+                        targetValue = if (searchSelected) 1.15f else 1.0f,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                        label = "searchFABScale"
+                    )
+                    
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .offset(y = 2.dp) // Perfect calculated vertical alignment relative to the 92.dp container height
+                            .graphicsLayer {
+                                scaleX = searchScale
+                                scaleY = searchScale
+                            }
+                            .shadow(
+                                elevation = if (searchSelected) 16.dp else 6.dp,
+                                shape = CircleShape,
+                                clip = false,
+                                ambientColor = if (searchSelected) accentColor else Color.Black,
+                                spotColor = if (searchSelected) accentColor else Color.Black
+                            )
+                            .size(58.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (searchSelected) {
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            accentColor,
+                                            Color(0xFF6200EE)
+                                        )
+                                    )
+                                } else {
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            Color(0xFF1E1B24),
+                                            Color(0xFF0F0B1E)
+                                        )
+                                    )
+                                }
+                            )
+                            .border(
+                                width = 1.5.dp,
+                                brush = if (searchSelected) {
+                                    Brush.verticalGradient(
+                                        colors = listOf(Color.White.copy(alpha = 0.7f), Color.Transparent)
+                                    )
+                                } else {
+                                    Brush.verticalGradient(
+                                        colors = listOf(Color.White.copy(alpha = 0.18f), Color.White.copy(alpha = 0.05f))
+                                    )
+                                },
+                                shape = CircleShape
+                            )
+                            .clickable {
+                                showSettings = false
+                                viewModel.setCurrentTab(4)
+                             }
+                            .testTag("nav_search"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = if (searchSelected) Color(0xFF100C1F) else Color.White.copy(alpha = 0.75f),
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
             }
@@ -1295,6 +1492,7 @@ fun HomeScreen(
                 )
 
                 LazyVerticalGrid(
+                    state = categoriesGridState,
                     columns = GridCells.Adaptive(minSize = 160.dp),
                     contentPadding = PaddingValues(
                         start = 16.dp,
@@ -1343,6 +1541,7 @@ fun HomeScreen(
                 }
             } else {
                 LazyVerticalGrid(
+                    state = categoriesGridState,
                     columns = GridCells.Adaptive(minSize = 160.dp),
                     contentPadding = PaddingValues(
                         start = 16.dp,
@@ -1386,7 +1585,7 @@ fun HomeScreen(
                                 ) {
                                     viewModel.selectCategory(category.id)
                                     showFavoritesOnly = false
-                                    currentTab = 0
+                                    viewModel.setCurrentTab(0)
                                     viewModel.setSearchQuery("")
                                 }
                                 .focusable(interactionSource = interactionSource)
@@ -1558,6 +1757,7 @@ fun HomeScreen(
                         }
                     } else {
                         LazyVerticalGrid(
+                            state = favoritesGridState,
                             columns = GridCells.Adaptive(minSize = 165.dp),
                             contentPadding = PaddingValues(
                                 start = 16.dp,
@@ -1609,8 +1809,21 @@ fun HomeScreen(
                     )
                 }
             }
+        } else if (currentTab == 3) {
+            // Tab 3: Dynamic Live Events Screen
+            LiveEventsScreen(
+                viewModel = viewModel,
+                innerPadding = innerPadding,
+                cardBg = cardBg,
+                accentColor = accentColor,
+                eventsListState = eventsListState,
+                onPlayFeed = { event, feed ->
+                    viewModel.playLiveEventFeed(event, feed)
+                },
+                onNavigateToPlayer = onNavigateToPlayer
+            )
         } else {
-            // Tab 3: Dedicated Live Search Screen
+            // Tab 4: Dedicated Live Search Screen
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1789,6 +2002,7 @@ fun HomeScreen(
                         }
                     } else {
                         LazyVerticalGrid(
+                            state = searchGridState,
                             columns = GridCells.Adaptive(minSize = 165.dp),
                             contentPadding = PaddingValues(
                                 start = 16.dp,
@@ -2751,27 +2965,56 @@ fun FloatingBottomBarItem(
     selectedIcon: ImageVector,
     label: String,
     accentColor: Color,
+    hasLiveBadge: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val scale by animateFloatAsState(
-        targetValue = if (selected) 1.12f else 1.0f,
+        targetValue = if (selected) 1.1f else 1.0f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "tabScale"
     )
     val dotAlpha by animateFloatAsState(
         targetValue = if (selected) 1.0f else 0.0f,
-        animationSpec = tween(durationMillis = 250),
+        animationSpec = tween(durationMillis = 200),
         label = "dotAlpha"
     )
+    val pillWidth by animateDpAsState(
+        targetValue = if (selected) 56.dp else 40.dp,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "pillWidth"
+    )
+    val pillColor by animateColorAsState(
+        targetValue = if (selected) accentColor.copy(alpha = 0.16f) else Color.Transparent,
+        animationSpec = tween(durationMillis = 250),
+        label = "pillColor"
+    )
+    val iconColor by animateColorAsState(
+        targetValue = if (selected) accentColor else Color.White.copy(alpha = 0.5f),
+        animationSpec = tween(durationMillis = 250),
+        label = "iconColor"
+    )
     
+    // Live badge breathing pulse animation
+    val pulseScale = if (hasLiveBadge) {
+        val infiniteTransition = rememberInfiniteTransition(label = "livePulse")
+        infiniteTransition.animateFloat(
+            initialValue = 0.9f,
+            targetValue = 1.3f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "livePulseScale"
+        ).value
+    } else {
+        1.0f
+    }
+
     Column(
         modifier = modifier
-            .clickable(
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-            .padding(vertical = 4.dp, horizontal = 12.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp)
             .graphicsLayer(scaleX = scale, scaleY = scale),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -2779,32 +3022,62 @@ fun FloatingBottomBarItem(
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .height(34.dp)
-                .width(60.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(if (selected) accentColor.copy(alpha = 0.18f) else Color.Transparent)
+                .height(30.dp)
+                .width(pillWidth)
+                .clip(RoundedCornerShape(15.dp))
+                .background(pillColor)
         ) {
-            Icon(
-                imageVector = if (selected) selectedIcon else icon,
-                contentDescription = label,
-                tint = if (selected) accentColor else Color.White.copy(alpha = 0.5f),
-                modifier = Modifier.size(24.dp)
-            )
+            Box(
+                modifier = Modifier.size(22.dp)
+            ) {
+                Icon(
+                    imageVector = if (selected) selectedIcon else icon,
+                    contentDescription = label,
+                    tint = iconColor,
+                    modifier = Modifier.fillMaxSize()
+                )
+                
+                if (hasLiveBadge) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .align(Alignment.TopEnd)
+                            .offset(x = 3.dp, y = (-2).dp)
+                            .graphicsLayer(scaleX = pulseScale, scaleY = pulseScale)
+                            .background(Color(0xFF141218), CircleShape) // Outline ring
+                            .padding(1.5.dp)
+                            .background(Color(0xFFE53935), CircleShape) // Red active status dot
+                    )
+                }
+            }
         }
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(3.dp))
         Text(
             text = label,
-            fontSize = 10.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            fontSize = 9.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
             color = if (selected) Color.White else Color.White.copy(alpha = 0.45f),
-            letterSpacing = 0.2.sp
+            letterSpacing = 0.1.sp
         )
         Spacer(modifier = Modifier.height(2.dp))
+        
+        // Custom expanding active dot indicator
+        val dotWidth by animateDpAsState(
+            targetValue = if (selected) 12.dp else 4.dp,
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+            label = "dotWidth"
+        )
+        val dotHeight by animateDpAsState(
+            targetValue = if (selected) 3.5.dp else 0.dp,
+            animationSpec = tween(durationMillis = 150),
+            label = "dotHeight"
+        )
         Box(
             modifier = Modifier
-                .size(4.dp)
+                .height(dotHeight)
+                .width(dotWidth)
                 .graphicsLayer(alpha = dotAlpha)
-                .background(accentColor, CircleShape)
+                .background(accentColor, RoundedCornerShape(1.5.dp))
         )
     }
 }
@@ -3358,4 +3631,1356 @@ fun SettingsOverlayContent(
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
+
+// =========================================================================
+// ==================== Live Events Layout Components ======================
+// =========================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LiveEventsScreen(
+    viewModel: ChannelViewModel,
+    innerPadding: PaddingValues,
+    cardBg: Color,
+    accentColor: Color,
+    eventsListState: LazyListState,
+    onPlayFeed: (com.example.data.GroupedEvent, com.example.data.EventFeed) -> Unit,
+    onNavigateToPlayer: () -> Unit
+) {
+    val liveEvents by viewModel.liveEvents.collectAsStateWithLifecycle()
+    val isEventsLoading by viewModel.isEventsLoading.collectAsStateWithLifecycle()
+    val eventsError by viewModel.eventsError.collectAsStateWithLifecycle()
+    
+    val eventsScrollScope = rememberCoroutineScope()
+    val scrollToTopTrigger by viewModel.eventsScrollToTopTrigger.collectAsStateWithLifecycle()
+    
+    LaunchedEffect(scrollToTopTrigger) {
+        if (scrollToTopTrigger > 0) {
+            eventsListState.animateScrollToItem(0)
+        }
+    }
+    
+    var selectedSportFilter by remember { mutableStateOf("All") }
+    var selectedEventForSheet by remember { mutableStateOf<com.example.data.GroupedEvent?>(null) }
+    
+    val context = LocalContext.current
+    val interestedEvents by viewModel.interestedLiveEvents.collectAsStateWithLifecycle()
+    var selectedEventForReminder by remember { mutableStateOf<com.example.data.GroupedEvent?>(null) }
+    var permissionEventToSchedule by remember { mutableStateOf<com.example.data.GroupedEvent?>(null) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            if (isGranted) {
+                permissionEventToSchedule?.let {
+                    selectedEventForReminder = it
+                }
+            } else {
+                Toast.makeText(context, "Notifications permission is required for event reminders.", Toast.LENGTH_LONG).show()
+            }
+            permissionEventToSchedule = null
+        }
+    )
+    
+    // Extract unique categories dynamically from events
+    val sportCategories = remember(liveEvents) {
+        val cats = liveEvents.map { it.sportCategory }.distinct()
+        listOf("All") + cats
+    }
+    
+    val filteredEvents = remember(liveEvents, selectedSportFilter) {
+        if (selectedSportFilter == "All") {
+            liveEvents
+        } else {
+            liveEvents.filter { it.sportCategory == selectedSportFilter }
+        }
+    }
+    
+    PullToRefreshBox(
+        isRefreshing = isEventsLoading,
+        onRefresh = { viewModel.fetchLiveEvents(forceRefresh = true) },
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = innerPadding.calculateTopPadding(), bottom = innerPadding.calculateBottomPadding())
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // Premium Glassmorphic Sport Category Chips
+            if (sportCategories.size > 1) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(sportCategories) { category ->
+                        val isSelected = selectedSportFilter == category
+                        val emoji = getEmojiForSport(category)
+                        
+                        val bgBrush = if (isSelected) {
+                            Brush.horizontalGradient(
+                                colors = listOf(accentColor, accentColor.copy(alpha = 0.85f))
+                            )
+                        } else {
+                            Brush.horizontalGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.04f), Color.White.copy(alpha = 0.02f))
+                            )
+                        }
+                        
+                        val borderBrush = if (isSelected) {
+                            Brush.horizontalGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.2f), Color.Transparent)
+                            )
+                        } else {
+                            Brush.horizontalGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.08f), Color.White.copy(alpha = 0.01f))
+                            )
+                        }
+                        
+                        Box(
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(bgBrush)
+                                .border(1.dp, borderBrush, CircleShape)
+                                .clickable { selectedSportFilter = category }
+                                .padding(horizontal = 18.dp, vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (emoji.isNotEmpty()) {
+                                    Text(text = emoji, fontSize = 13.sp)
+                                }
+                                Text(
+                                    text = category,
+                                    color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.85f),
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                    letterSpacing = 0.2.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (isEventsLoading && liveEvents.isEmpty()) {
+                // Shimmer Loader for Events
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(6) {
+                        EventCardSkeleton(cardBg = cardBg)
+                    }
+                }
+            } else if (eventsError != null && liveEvents.isEmpty()) {
+                // High-End Error State
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Error icon",
+                            tint = Color.Red.copy(alpha = 0.6f),
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = eventsError ?: "Unknown Error",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                        Button(
+                            onClick = { viewModel.fetchLiveEvents(forceRefresh = true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = accentColor)
+                        ) {
+                            Text("Retry Sync", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            } else if (filteredEvents.isEmpty()) {
+                PremiumEmptyState(
+                    selectedSportFilter = selectedSportFilter,
+                    accentColor = accentColor,
+                    onRefresh = { viewModel.fetchLiveEvents(forceRefresh = true) }
+                )
+            } else {
+                // Main Events List
+                LazyColumn(
+                    state = eventsListState,
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp, top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(filteredEvents, key = { it.id }) { event ->
+                        val isInterested = interestedEvents.any { it.id == event.id }
+                        LiveEventCard(
+                            event = event,
+                            cardBg = cardBg,
+                            accentColor = accentColor,
+                            isInterested = isInterested,
+                            onToggleInterest = {
+                                if (isInterested) {
+                                    viewModel.cancelEventReminder(event.id)
+                                    Toast.makeText(context, "Reminder cancelled", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                                            context,
+                                            android.Manifest.permission.POST_NOTIFICATIONS
+                                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                        if (hasPermission) {
+                                            selectedEventForReminder = event
+                                        } else {
+                                            permissionEventToSchedule = event
+                                            permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                        }
+                                    } else {
+                                        selectedEventForReminder = event
+                                    }
+                                }
+                            },
+                            onPlayDirect = { feed ->
+                                onPlayFeed(event, feed)
+                                onNavigateToPlayer()
+                            },
+                            onSelectFeed = { 
+                                selectedEventForSheet = event
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    // Bottom Sheet for Multiple Feed Selection
+    selectedEventForSheet?.let { event ->
+        FeedSelectionBottomSheet(
+            event = event,
+            accentColor = accentColor,
+            cardBg = cardBg,
+            onDismiss = { selectedEventForSheet = null },
+            onFeedSelected = { feed ->
+                onPlayFeed(event, feed)
+                selectedEventForSheet = null
+                onNavigateToPlayer()
+            }
+        )
+    }
+
+    // Dialog for Set Event Reminder Timing
+    selectedEventForReminder?.let { event ->
+        ReminderTimingDialog(
+            event = event,
+            onDismiss = { selectedEventForReminder = null },
+            onSchedule = { delayMillis ->
+                viewModel.scheduleEventReminder(event, delayMillis)
+                Toast.makeText(context, "Reminder set!", Toast.LENGTH_SHORT).show()
+                selectedEventForReminder = null
+            }
+        )
+    }
+}
+
+@Composable
+fun ReminderTimingDialog(
+    event: com.example.data.GroupedEvent,
+    onDismiss: () -> Unit,
+    onSchedule: (Long) -> Unit
+) {
+    var selectedOption by remember { mutableStateOf(5 * 60 * 1000L) } // Default 5 mins
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Notifications,
+                    contentDescription = null,
+                    tint = Color(0xFFD0BCFF),
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = "Set Event Reminder",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Choose when you would like to receive an alert before '${event.title}' starts:",
+                    fontSize = 13.sp,
+                    color = Color.White.copy(alpha = 0.7f),
+                    lineHeight = 18.sp
+                )
+
+                val options = listOf(
+                    Pair("Now (Instant Test Notification)", 1000L),
+                    Pair("5 minutes before starting", 5 * 60 * 1000L),
+                    Pair("15 minutes before starting", 15 * 60 * 1000L),
+                    Pair("30 minutes before starting", 30 * 60 * 1000L),
+                    Pair("1 hour before starting", 60 * 60 * 1000L)
+                )
+
+                options.forEach { (label, delay) ->
+                    val isSelected = selectedOption == delay
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (isSelected) Color.White.copy(alpha = 0.06f) else Color.Transparent
+                            )
+                            .clickable { selectedOption = delay }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = isSelected,
+                            onClick = { selectedOption = delay },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = Color(0xFFD0BCFF),
+                                unselectedColor = Color.White.copy(alpha = 0.4f)
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = label,
+                            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.8f),
+                            fontSize = 13.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSchedule(selectedOption) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFD0BCFF),
+                    contentColor = Color.Black
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("SET ALARM", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("CANCEL", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
+            }
+        },
+        containerColor = Color(0xFF1E1E1E),
+        shape = RoundedCornerShape(24.dp)
+    )
+}
+
+@Composable
+fun LivePulseIndicator(color: Color) {
+    val infiniteTransition = rememberInfiniteTransition(label = "livePulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.8f,
+        targetValue = 1.4f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale"
+    )
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(16.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .graphicsLayer(scaleX = scale, scaleY = scale)
+                .background(color.copy(alpha = 0.4f), CircleShape)
+        )
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .graphicsLayer(alpha = alpha)
+                .background(color, CircleShape)
+        )
+    }
+}
+
+fun parseMatchTitle(title: String): Pair<String, String> {
+    val separators = listOf(" vs ", " vs. ", " VS ", " VS. ", " - ", " @ ", " at ", " AT ")
+    for (sep in separators) {
+        if (title.contains(sep)) {
+            val parts = title.split(sep, limit = 2)
+            if (parts.size == 2 && parts[0].trim().isNotEmpty() && parts[1].trim().isNotEmpty()) {
+                return Pair(parts[0].trim(), parts[1].trim())
+            }
+        }
+    }
+    return Pair(title, "")
+}
+
+@Composable
+fun MatchupVisualizer(
+    title: String,
+    logoUrl: String,
+    accentColor: Color
+) {
+    val (team1, team2) = remember(title) { parseMatchTitle(title) }
+    
+    if (team2.isNotEmpty()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Team 1
+            Column(
+                modifier = Modifier.weight(1.2f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .background(
+                            brush = Brush.radialGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.08f), Color.White.copy(alpha = 0.02f))
+                            ),
+                            shape = CircleShape
+                        )
+                        .border(1.dp, Color.White.copy(alpha = 0.1f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = team1.take(1).uppercase(),
+                        color = accentColor,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = team1,
+                    color = Color.White.copy(alpha = 0.95f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            
+            // VS Badge
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(0.6f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(10.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "VS",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+            }
+            
+            // Team 2
+            Column(
+                modifier = Modifier.weight(1.2f),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .background(
+                            brush = Brush.radialGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.08f), Color.White.copy(alpha = 0.02f))
+                            ),
+                            shape = CircleShape
+                        )
+                        .border(1.dp, Color.White.copy(alpha = 0.1f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = team2.take(1).uppercase(),
+                        color = accentColor,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = team2,
+                    color = Color.White.copy(alpha = 0.95f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 14.dp)
+                .background(Color.White.copy(alpha = 0.02f), RoundedCornerShape(16.dp))
+                .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(16.dp))
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            SubcomposeAsyncImage(
+                model = logoUrl,
+                contentDescription = null,
+                loading = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.White.copy(alpha = 0.04f))
+                    )
+                },
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.03f))
+                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+            )
+            
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    lineHeight = 18.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Special Live Event Broadcast",
+                    fontSize = 10.sp,
+                    color = Color.White.copy(alpha = 0.4f),
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
+
+fun getEventStartTime(event: com.example.data.GroupedEvent): Long {
+    val regex = """\b(\d{1,2})[.:](\d{2})\b""".toRegex()
+    val matchResult = regex.find(event.title)
+    if (matchResult != null) {
+        try {
+            val hr = matchResult.groupValues[1].toInt()
+            val min = matchResult.groupValues[2].toInt()
+            val cal = java.util.Calendar.getInstance()
+            cal.set(java.util.Calendar.HOUR_OF_DAY, hr)
+            cal.set(java.util.Calendar.MINUTE, min)
+            cal.set(java.util.Calendar.SECOND, 0)
+            cal.set(java.util.Calendar.MILLISECOND, 0)
+            if (cal.timeInMillis < System.currentTimeMillis()) {
+                cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+            }
+            return cal.timeInMillis
+        } catch (e: Exception) {
+            // fallback
+        }
+    }
+    val hash = Math.abs(event.id.hashCode())
+    val cal = java.util.Calendar.getInstance()
+    if (hash % 3 == 0) {
+        cal.add(java.util.Calendar.MINUTE, -20)
+    } else {
+        val minsFuture = (hash % 45) + 5
+        cal.add(java.util.Calendar.MINUTE, minsFuture)
+    }
+    return cal.timeInMillis
+}
+
+
+
+@Composable
+fun EventCountdownBadge(
+    event: com.example.data.GroupedEvent
+) {
+    val startTime = remember(event.id) { getEventStartTime(event) }
+    var remainingMillis by remember(startTime) { mutableStateOf(startTime - System.currentTimeMillis()) }
+
+    LaunchedEffect(startTime) {
+        while (remainingMillis > 0) {
+            kotlinx.coroutines.delay(1000L)
+            remainingMillis = startTime - System.currentTimeMillis()
+        }
+    }
+
+    if (remainingMillis > 0) {
+        val totalSecs = remainingMillis / 1000
+        val hours = totalSecs / 3600
+        val minutes = (totalSecs % 3600) / 60
+        val seconds = totalSecs % 60
+        val countdownText = if (hours > 0) {
+            String.format("%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format("%02d:%02d", minutes, seconds)
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .background(Color(0xFFE28743).copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                .border(1.dp, Color(0xFFE28743).copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .background(Color(0xFFE28743), CircleShape)
+            )
+            Text(
+                text = "STARTS IN $countdownText",
+                color = Color(0xFFE28743),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    } else {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .background(Color(0xFFE53935).copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                .border(1.dp, Color(0xFFE53935).copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            LivePulseIndicator(color = Color(0xFFE53935))
+            Text(
+                text = "LIVE",
+                color = Color(0xFFFF8A80),
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.5.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun LiveEventCard(
+    event: com.example.data.GroupedEvent,
+    cardBg: Color,
+    accentColor: Color,
+    isInterested: Boolean,
+    onToggleInterest: () -> Unit,
+    onPlayDirect: (com.example.data.EventFeed) -> Unit,
+    onSelectFeed: () -> Unit
+) {
+    val cardBrush = Brush.verticalGradient(
+        colors = listOf(
+            cardBg,
+            cardBg.copy(alpha = 0.85f)
+        )
+    )
+
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(cardBrush, RoundedCornerShape(24.dp))
+            .border(
+                width = 1.dp,
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.08f),
+                        Color.White.copy(alpha = 0.01f)
+                    )
+                ),
+                shape = RoundedCornerShape(24.dp)
+            )
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            // Category & Live Badge Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Category Chip with Emoji
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    val emoji = getEmojiForSport(event.sportCategory)
+                    if (emoji.isNotEmpty()) {
+                        Text(text = emoji, fontSize = 11.sp)
+                    }
+                    Text(
+                        text = event.sportCategory.uppercase(),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        color = accentColor,
+                        letterSpacing = 1.sp
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    EventCountdownBadge(event = event)
+                    
+                    // Sleek circular notification bell
+                    IconButton(
+                        onClick = onToggleInterest,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(
+                                if (isInterested) accentColor.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.04f),
+                                CircleShape
+                            )
+                            .border(
+                                1.dp,
+                                if (isInterested) accentColor.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.08f),
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = if (isInterested) Icons.Default.NotificationsActive else Icons.Default.Notifications,
+                            contentDescription = "Toggle Reminder",
+                            tint = if (isInterested) accentColor else Color.White.copy(alpha = 0.6f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Beautiful Matchup
+            MatchupVisualizer(
+                title = event.title,
+                logoUrl = event.logoUrl,
+                accentColor = accentColor
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Display Feeds Pills Indicator
+            if (event.feeds.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.4f),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = "Feeds:",
+                        fontSize = 11.sp,
+                        color = Color.White.copy(alpha = 0.4f),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        event.feeds.forEach { feed ->
+                            val isMultiLingual = feed.language.isNotEmpty()
+                            val displayLang = if (isMultiLingual) " • ${feed.language.uppercase()}" else ""
+                            Box(
+                                modifier = Modifier
+                                    .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "${feed.provider}$displayLang",
+                                    fontSize = 9.sp,
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.2.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Watch/Choose Buttons
+            if (event.feeds.size == 1) {
+                val feed = event.feeds.first()
+                Button(
+                    onClick = { onPlayDirect(feed) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = accentColor,
+                        contentColor = Color(0xFF1D0E3D)
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize(),
+                    contentPadding = PaddingValues(vertical = 12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = Color(0xFF1D0E3D),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "WATCH BROADCAST",
+                        color = Color(0xFF1D0E3D),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.8.sp
+                    )
+                }
+            } else {
+                Button(
+                    onClick = onSelectFeed,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.White.copy(alpha = 0.05f),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                    modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize(),
+                    contentPadding = PaddingValues(vertical = 12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "Tune Feeds",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "CHOOSE FEED (${event.feeds.size} SOURCES)",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.8.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FeedSelectionBottomSheet(
+    event: com.example.data.GroupedEvent,
+    accentColor: Color,
+    cardBg: Color,
+    onDismiss: () -> Unit,
+    onFeedSelected: (com.example.data.EventFeed) -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.82f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                ),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 480.dp)
+                    .clickable(enabled = false) {}
+                    .padding(horizontal = 16.dp, vertical = 24.dp),
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF121214)),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 20.dp, vertical = 16.dp)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(40.dp)
+                            .height(5.dp)
+                            .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                    )
+                    
+                    Spacer(modifier = Modifier.height(20.dp))
+                    
+                    Text(
+                        text = "Select Broadcast Feed",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color.White,
+                        letterSpacing = (-0.5).sp
+                    )
+                    
+                    Spacer(modifier = Modifier.height(6.dp))
+                    
+                    Text(
+                        text = event.title,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = accentColor,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 18.sp
+                    )
+                    
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        event.feeds.forEach { feed ->
+                            val interactionSource = remember { MutableInteractionSource() }
+                            val isFocused by interactionSource.collectIsFocusedAsState()
+                            val isHovered by interactionSource.collectIsHoveredAsState()
+                            val isPressed = isFocused || isHovered
+                            
+                            val bgScale by animateFloatAsState(if (isPressed) 1.02f else 1.0f, label = "feedScale")
+                            
+                            val itemBgBrush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.03f),
+                                    Color.White.copy(alpha = 0.01f)
+                                )
+                            )
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .graphicsLayer(scaleX = bgScale, scaleY = bgScale)
+                                    .background(itemBgBrush, RoundedCornerShape(18.dp))
+                                    .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(18.dp))
+                                    .clickable(
+                                        interactionSource = interactionSource,
+                                        indication = androidx.compose.foundation.LocalIndication.current,
+                                        onClick = { onFeedSelected(feed) }
+                                    )
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .background(accentColor.copy(alpha = 0.1f), CircleShape)
+                                            .border(1.dp, accentColor.copy(alpha = 0.2f), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Language,
+                                            contentDescription = null,
+                                            tint = accentColor,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    
+                                    Column {
+                                        Text(
+                                            text = feed.provider.uppercase(),
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = Color.White,
+                                            letterSpacing = 0.5.sp
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = "Broadcast Language: ${feed.language}",
+                                            fontSize = 11.sp,
+                                            color = Color.White.copy(alpha = 0.5f),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                                
+                                Icon(
+                                    imageVector = Icons.Default.PlayCircle,
+                                    contentDescription = "Play Feed",
+                                    tint = accentColor,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth().minimumInteractiveComponentSize()
+                    ) {
+                        Text(
+                            text = "CLOSE STREAM LIST",
+                            color = Color.White.copy(alpha = 0.5f),
+                            fontWeight = FontWeight.Black,
+                            fontSize = 12.sp,
+                            letterSpacing = 1.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun EventCardSkeleton(cardBg: Color) {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.04f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(100.dp)
+                        .height(14.dp)
+                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
+                )
+                Box(
+                    modifier = Modifier
+                        .width(40.dp)
+                        .height(14.dp)
+                        .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(54.dp)
+                        .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(14.dp))
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.7f)
+                            .height(18.dp)
+                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.4f)
+                            .height(12.dp)
+                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(4.dp))
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(14.dp))
+            )
+        }
+    }
+}
+
+fun getEmojiForSport(category: String): String {
+    val catLower = category.lowercase()
+    return when {
+        catLower.contains("foot") || catLower.contains("fútbol") || catLower.contains("soccer") || catLower.contains("copa") || catLower.contains("world cup") || catLower.contains("fifa") || catLower.contains("ligapro") -> "⚽"
+        catLower.contains("basket") || catLower.contains("nba") -> "🏀"
+        catLower.contains("tennis") || catLower.contains("wimbledon") -> "🎾"
+        catLower.contains("cycle") || catLower.contains("tour") -> "🚴"
+        catLower.contains("horse") -> "🏇"
+        catLower.contains("racing") -> "🏎️"
+        else -> "🏆"
+    }
+}
+
+@Composable
+fun PremiumEmptyState(
+    selectedSportFilter: String,
+    accentColor: Color,
+    onRefresh: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .widthIn(max = 420.dp)
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.02f),
+                            Color.White.copy(alpha = 0.005f)
+                        )
+                    ),
+                    shape = RoundedCornerShape(24.dp)
+                )
+                .border(
+                    width = 1.dp,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0.08f),
+                            Color.White.copy(alpha = 0.01f)
+                        )
+                    ),
+                    shape = RoundedCornerShape(24.dp)
+                )
+                .padding(vertical = 40.dp, horizontal = 24.dp)
+        ) {
+            // High-quality custom vector Canvas illustration
+            Box(
+                modifier = Modifier
+                    .size(160.dp)
+                    .drawBehind {
+                        // Background glow
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    accentColor.copy(alpha = 0.15f),
+                                    Color.Transparent
+                                ),
+                                center = center,
+                                radius = size.minDimension / 1.5f
+                            )
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.size(120.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    val cx = w / 2f
+                    val cy = h / 2f + 15f // Shifted slightly down for balance
+                    
+                    // 1. Draw radar/orbital concentric background rings (subtle)
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.03f),
+                        radius = cx * 0.9f,
+                        style = Stroke(width = 1.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f))
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.05f),
+                        radius = cx * 0.65f,
+                        style = Stroke(width = 1f)
+                    )
+                    
+                    // 2. Draw satellite dish structure / tower base
+                    val path = Path().apply {
+                        // Tower base (triangle legs)
+                        moveTo(cx - 15f, cy)
+                        lineTo(cx - 25f, cy + 30f)
+                        lineTo(cx + 25f, cy + 30f)
+                        lineTo(cx + 15f, cy)
+                        close()
+                        
+                        // Cross braces
+                        moveTo(cx - 20f, cy + 15f)
+                        lineTo(cx + 20f, cy + 15f)
+                    }
+                    drawPath(
+                        path = path,
+                        color = Color.White.copy(alpha = 0.35f),
+                        style = Stroke(width = 3f, join = StrokeJoin.Round)
+                    )
+                    
+                    // 3. Central receiver dish (arc)
+                    drawArc(
+                        color = accentColor.copy(alpha = 0.9f),
+                        startAngle = 190f,
+                        sweepAngle = 160f,
+                        useCenter = false,
+                        topLeft = Offset(cx - 25f, cy - 20f),
+                        size = Size(50f, 30f),
+                        style = Stroke(width = 4.5f, cap = StrokeCap.Round)
+                    )
+                    
+                    // Dish stem/feed horn
+                    drawLine(
+                        color = accentColor.copy(alpha = 0.9f),
+                        start = Offset(cx, cy - 5f),
+                        end = Offset(cx, cy - 22f),
+                        strokeWidth = 4f,
+                        cap = StrokeCap.Round
+                    )
+                    
+                    // Horn point (glowing dot)
+                    drawCircle(
+                        color = Color.White,
+                        radius = 4f,
+                        center = Offset(cx, cy - 22f)
+                    )
+                    
+                    // 4. Glowing signal transmission arcs radiating upwards
+                    val pulseAlphas = listOf(0.15f, 0.45f, 0.85f)
+                    val pulseOffsets = listOf(20f, 38f, 56f)
+                    for (i in pulseAlphas.indices) {
+                        val radius = pulseOffsets[i]
+                        val alpha = pulseAlphas[i]
+                        drawArc(
+                            color = accentColor.copy(alpha = alpha),
+                            startAngle = 220f,
+                            sweepAngle = 100f,
+                            useCenter = false,
+                            topLeft = Offset(cx - radius, cy - 22f - radius),
+                            size = Size(radius * 2, radius * 2),
+                            style = Stroke(width = 3.5f - (i * 0.5f), cap = StrokeCap.Round)
+                        )
+                    }
+                    
+                    // Decorative small floating network nodes/stars
+                    drawCircle(
+                        color = accentColor.copy(alpha = 0.5f),
+                        radius = 3f,
+                        center = Offset(cx - 38f, cy - 10f)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.3f),
+                        radius = 2f,
+                        center = Offset(cx + 42f, cy + 5f)
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(20.dp))
+            
+            // Text Details
+            Text(
+                text = if (selectedSportFilter == "All") "No Broadcasts Scheduled" else "$selectedSportFilter Schedules Clear",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text(
+                text = if (selectedSportFilter == "All") {
+                    "Our live event radar is currently clear. Pull down on the screen to scan the server for freshly announced feeds."
+                } else {
+                    "There are no active matches or live streams under '$selectedSportFilter' right now. Check back soon or pull down to refresh!"
+                },
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Normal,
+                textAlign = TextAlign.Center,
+                lineHeight = 18.sp
+            )
+            
+            Spacer(modifier = Modifier.height(28.dp))
+            
+            // Interactive Refresh/Action button with feedback ripple
+            Button(
+                onClick = onRefresh,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = accentColor,
+                    contentColor = Color.Black
+                ),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
+                modifier = Modifier.minimumInteractiveComponentSize()
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Scan Live Radar",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
 

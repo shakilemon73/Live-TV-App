@@ -242,6 +242,15 @@ class BackgroundSyncManager(
                     // 1. Instantly save progress to database in real-time
                     repo.updateChannelBrokenStatus(channel.id, !working, System.currentTimeMillis())
                     
+                    if (!working) {
+                        com.example.data.StreamLogManager.logError(
+                            type = "Verification",
+                            targetName = channel.name,
+                            url = channel.streamUrl,
+                            errorMessage = "Unreachable Stream"
+                        )
+                    }
+                    
                     synchronized(this@BackgroundSyncManager) {
                         if (working) {
                             workingIds.add(channel.id)
@@ -286,7 +295,7 @@ class BackgroundSyncManager(
                 onComplete(true)
             } catch (e: Exception) {
                 Log.e(TAG, "Gist synchronization failed", e)
-                _syncStatusMessage.value = "Sync failed: ${e.localizedMessage ?: "Connection error"}"
+                _syncStatusMessage.value = "Offline / Connection failed. Loaded cached channels from offline database."
                 onComplete(false)
             } finally {
                 _isSyncing.value = false
@@ -349,6 +358,16 @@ class BackgroundSyncManager(
                 }
                 .collect { (channel, working) ->
                     repo.updateChannelBrokenStatus(channel.id, !working, System.currentTimeMillis())
+                    
+                    if (!working) {
+                        com.example.data.StreamLogManager.logError(
+                            type = "Verification",
+                            targetName = channel.name,
+                            url = channel.streamUrl,
+                            errorMessage = "Scheduled background check failed"
+                        )
+                    }
+                    
                     synchronized(this@BackgroundSyncManager) {
                         if (working) {
                             workingIds.add(channel.id)

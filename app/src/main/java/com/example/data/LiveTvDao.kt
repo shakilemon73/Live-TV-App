@@ -118,6 +118,25 @@ interface LiveTvDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertM3uMeta(meta: M3uMetaEntity)
 
+    // --- Cached Live Events ---
+    @Query("SELECT * FROM cached_live_events ORDER BY sportCategory ASC")
+    fun getAllCachedLiveEventsFlow(): Flow<List<CachedLiveEventEntity>>
+
+    @Query("SELECT * FROM cached_live_events ORDER BY sportCategory ASC")
+    suspend fun getAllCachedLiveEvents(): List<CachedLiveEventEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCachedLiveEvents(events: List<CachedLiveEventEntity>)
+
+    @Query("DELETE FROM cached_live_events")
+    suspend fun clearCachedLiveEvents()
+
+    @Transaction
+    suspend fun replaceCachedLiveEvents(events: List<CachedLiveEventEntity>) {
+        clearCachedLiveEvents()
+        insertCachedLiveEvents(events)
+    }
+
     // --- Recordings ---
     @Query("SELECT * FROM recordings ORDER BY recordedAt DESC")
     fun getAllRecordings(): Flow<List<RecordingEntity>>
@@ -127,4 +146,23 @@ interface LiveTvDao {
 
     @Delete
     suspend fun deleteRecording(recording: RecordingEntity)
+
+    // --- Interested Events ---
+    @Query("SELECT * FROM interested_events ORDER BY startTime ASC")
+    fun getAllInterestedEventsFlow(): Flow<List<InterestedEventEntity>>
+
+    @Query("SELECT * FROM interested_events ORDER BY startTime ASC")
+    suspend fun getAllInterestedEvents(): List<InterestedEventEntity>
+
+    @Query("SELECT * FROM interested_events WHERE id = :id LIMIT 1")
+    suspend fun getInterestedEventById(id: String): InterestedEventEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertInterestedEvent(event: InterestedEventEntity): Long
+
+    @Query("DELETE FROM interested_events WHERE id = :id")
+    suspend fun deleteInterestedEventById(id: String)
+
+    @Query("UPDATE interested_events SET isNotified = :isNotified WHERE id = :id")
+    suspend fun updateInterestedEventNotified(id: String, isNotified: Boolean)
 }
