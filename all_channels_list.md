@@ -1,0 +1,1270 @@
+# Master List of IPTV Channels (All 19 Playlists)
+
+This file contains a list of all channels collected and parsed from the 19 IPTV playlists integrated into your application.
+
+## Playlists Summary Table
+
+| Playlist Name | Total Channels | Unique Channels |
+| :--- | :---: | :---: |
+| BDIX IPTV | 257 | 253 |
+| Animation | 1 | 1 |
+| Auto | 1 | 1 |
+| Bangla Channel | 59 | 54 |
+| Bangla News | 41 | 33 |
+| Business | 1 | 1 |
+| Comedy | 6 | 6 |
+| Cricket | 15 | 15 |
+| Documentary | 43 | 40 |
+| Entertainment | 21 | 21 |
+| International News | 46 | 44 |
+| Kids | 27 | 24 |
+| Lifestyle | 6 | 6 |
+| Movies | 82 | 77 |
+| Music | 29 | 28 |
+| Religious | 49 | 42 |
+| Sports & Football | 91 | 75 |
+| Doms9 Base | 152 | 152 |
+| Doms9 US TV | 326 | 326 |
+
+**Grand Total Across All Playlists:** 1253 channels (892 unique names)
+
+
+## Categorized Channel Listings
+
+
+### BDIX IPTV (253 unique channels)
+- 9XM
+- A SPOR
+- AAKASH AATH
+- AL EKHBARIA
+- AL ISTIQAMA
+- AL QAMAR
+- AL SUNNAH TV
+- ALMASIRA MUBASHER
+- ATN Music (360p)
+- ATN News
+- Action Hollywood Movies
+- Akash Aath
+- Al Jazeera
+- Al Quran
+- Al Quran Radio
+- Amazon SAT
+- Animal Planet HD
+- Animal_Planet_HD
+- Antarjal
+- Arabica TV
+- Arihant TV
+- B4U Kadak
+- B4U Movies
+- BAHRAIN QURAN
+- BBC News
+- BD VS ZIM
+- BTV
+- Baallee
+- Bangla Vision
+- Bein Sports
+- Bein Sports 1
+- Bein Sports 1 Max Arabic
+- Bein Sports Direct
+- Bein Sports Tekrar
+- Big Magic
+- Blast
+- Boishakhi TV
+- BuddyStar HD
+- CNN (US)
+- Cartoon Network English
+- Channel 24 HD
+- Channel 7
+- Channel 9 HD
+- Channel I HD
+- Channel S
+- Cineedge HD
+- Colors Infinity SD
+- Cowboy tv
+- Crazy Ex
+- Crimes
+- DBC News HD
+- DD Sports
+- DW English
+- DW English _
+- DW NEWS
+- Deepto TV
+- Deepto TV HD
+- Delicious
+- Desh TV
+- Desh TV (1080p)
+- Deshe Bideshe
+- Deshi TV (720p)
+- Digital Fashion
+- Doraemon TV
+- EWTN TV
+- Ekattor HD
+- Ekushey TV
+- Ekushey TV (480p)
+- FASHION ONE
+- FM Radio
+- Fighters
+- Flash Guys HD
+- Food Food
+- France 24 English (720p)
+- France News 24
+- Freelancer
+- Funny Junior HD
+- G Series Drama
+- Gazi TV
+- Goldmines
+- Goldmines Bollywood
+- Goldmines Movies
+- Goldmines Movies 2
+- Gopal Bhar TV
+- Green TV (1080p)
+- Greenland 2: Migration (2026) (Hindi)
+- HBO
+- Hindi Hits HD
+- Hindi Movies
+- Independent TV
+- Insight
+- Intelligence
+- Iran International(EN)
+- Islamic TV
+- Jamuna TV
+- Jana Nayagan (2026) (Hindi)
+- Joy
+- Kids Stars
+- Live Quran TV
+- Live Sports-10
+- Lucky Family
+- Luxel HD
+- MAASRANGA HD
+- MBC tv
+- MK Six
+- MUSIC BANGLA
+- MY TV
+- Maasranga TV
+- Madani Tv
+- Mardaani 3
+- Motor Vision
+- Motu Patlu
+- Mr Bean Animated
+- Music India
+- Music Mastii
+- My TV
+- NDTV English
+- NDTV Hindi
+- NDTV NEWS
+- NHK World
+- NK
+- NTV
+- News 24 HD
+- News Max 2
+- Nikki
+- Nursary Rhymes
+- Originals
+- PBS Kids
+- Party Universe
+- Peace TV Urdu
+- Peace Tv English
+- Press TV Iran
+- Pritam and Pedro(S1E1)
+- Pritam and Pedro(S1E2)
+- Pritam and Pedro(S1E3)
+- Pritam and Pedro(S1E4)
+- Pritam and Pedro(S1E5)
+- Pritam and Pedro(S1E6)
+- QURAN
+- QURAN RADIOTV SMC
+- Quran
+- R Plus Gold
+- R Plus Gould
+- R Plus News
+- REAL WILD
+- RT NEWS USA
+- RT News (EN)
+- RTNEWS GLOBAL
+- Rongeen TV
+- SRK TV
+- Saudi Quran
+- Saudia Arabia
+- Screem
+- Sheemaroo Bollywood
+- Sky Sports
+- Smarty
+- Sochi 24 HD
+- Somoy News TV (1080p)
+- Somoy TV
+- South Movies
+- Sports Legends
+- Sports Range
+- Star News
+- Star Sports 1 HD
+- Sunnah Tv
+- Superrix HD
+- Surongo
+- T Global News (Canada)
+- TRT WORLD
+- Test
+- Thunder Er
+- Times Of India
+- Tom & Jarry
+- Tom & Jerry TV
+- Travel XP English
+- Travel XP English NZ
+- True Stories
+- Uniques HD
+- Welcome to PlayZ TV
+- YRF Music HD
+- Zee Action
+- Zee Anmol TV
+- pcv
+- tvg-logo="https://www.fancode.com/skillup-uploads/cms-media/113.png" group-title="Live Event", Belgium vs Gibraltar (ICC Men's T20 World Cup Europe Sub Regional Qualifier B- 2026)
+- tvg-logo="https://www.fancode.com/skillup-uploads/cms-media/113.png" group-title="Live Event", Denmark vs Estonia (ICC Men's T20 World Cup Europe Sub Regional Qualifier B- 2026)
+- tvg-logo="https://www.fancode.com/skillup-uploads/cms-media/143443_6134_MW_SY_FC-WEB_1782272593203.jpg" group-title="Live Event", Shivamogga Yodhas vs Mysore Warriors (Maharaja T20 Trophy- 2026)
+- tvg-logo="https://www.fancode.com/skillup-uploads/cms-media/143631_6150_NAM_VID_fc-web.jpg" group-title="Live Event", Namibia vs Vidarbha (Vidarbha Cricket Association tour of Namibia)
+- w_300,q_85/-C7MX5UBv9knK3AHdKOi/posters/90d82846-70b9-44ee-9f7e-e440f00b3be8.png",[BD] Zee Bangla Cinema
+- w_300,q_85/-Xz3PJwBcqxnFHJBDAlE/posters/fecea361-8b60-4aeb-a530-6e27eee8178a.png",[BD] Mohona TV
+- w_300,q_85/-y50-JQBv9knK3AHLzSn/posters/0ab48ac0-ec84-4ca2-9601-746ff3cb809e.webp",[BD] Sony Entertainment Television HD
+- w_300,q_85/0C63X5UBv9knK3AHxaOs/posters/6dce1143-1045-4fec-ac4f-86d2bfb32447.png",[BD] HUM
+- w_300,q_85/0y_tDJsBNnOkwJLWNrdE/posters/2ff058e1-630f-4657-8dc6-b677e65642c5.png",[BD] Global TV
+- w_300,q_85/1i6e-JQBv9knK3AHHTXR/posters/325887a7-84ea-4cf9-a6fd-6111ddc25671.webp",[BD] Discovery Kids
+- w_300,q_85/1y6e-JQBv9knK3AHNDWb/posters/ee9ba01b-1bcf-436b-b273-7b857f0810fb.webp",[BD] Cartoon Network HD +
+- w_300,q_85/2S5t-JQBv9knK3AHJTTW/posters/ae74f943-77c9-4395-a16c-8ed84b439080.webp",[BD] Sony Entertainment Television
+- w_300,q_85/5cwRnZUBtpl-Sbt7wWrN/posters/5779ade3-e9ba-4107-b3da-bae6f891500a.png",[BD] &TV HD
+- w_300,q_85/5y7HX5UBv9knK3AHs6Nk/posters/7582fb79-c15f-4247-ba5b-1d2dd27f3d71.png",[BD] Zee Cinema HD
+- w_300,q_85/6Hz1PJwBcqxnFHJBhgkV/posters/845f1e3f-987a-47cc-a48d-ee12d8f4d419.png",[BD] Desh TV
+- w_300,q_85/7C6j-JQBv9knK3AHVzUA/posters/e8f84105-5efe-4e91-a0d4-18a0849cf2f2.webp",[BD] TLC
+- w_300,q_85/7S6j-JQBv9knK3AHbzXC/posters/0973097c-bc5c-4b28-aaca-f04d6f6cb5e2.webp",[BD] TLC HD
+- w_300,q_85/7x0Jd5YBEef-9-uVv_Gy/posters/f9c07bfc-9fde-40d0-91a1-e28c5840f400.png",[BD] Zee Anmol
+- w_300,q_85/AS6s-JQBv9knK3AHDTZb/posters/eab8fd0f-9351-464c-b45e-332f38b49f4b.webp",[BD] Discovery Science
+- w_300,q_85/Ai51-JQBv9knK3AH_jWs/posters/663e52a6-1a9f-4458-b4aa-7c03d84972f1.webp",[BD] Sony MAX HD
+- w_300,q_85/Ay52-JQBv9knK3AHFDWt/posters/00afb30b-3c19-4c4c-abd8-891db94e4767.webp",[BD] Sony MAX
+- w_300,q_85/Ay6s-JQBv9knK3AHJTY1/posters/e8f65578-e82d-4e4a-a1ff-073becc5bd71.webp",[BD] Discovery Turbo
+- w_300,q_85/CXz4PJwBcqxnFHJBPwrG/posters/2f913e34-3a6c-45e6-9f1f-97bf129a2ff5.png",[BD] Movie Bangla
+- w_300,q_85/DK8dd5YBrjBfS2_Ru22e/posters/a4e57fd0-1853-4540-a9bc-0265ee43b5cb.png",[BD] Zing
+- w_300,q_85/DNMXs5UBm1RY_In7IJ72/posters/5638c4e8-36ba-4e8e-848e-233183b3ec17.png",[BD] Toffee Dramas
+- w_300,q_85/ES55-JQBv9knK3AHNDWC/posters/13411be9-62b9-4a99-a062-b6e91dfb1099.webp",[BD] Sony SAB HD
+- w_300,q_85/ES_cZZsBNnOkwJLW1Oz1/posters/b872b8f5-cb6b-45a1-a1cd-7609df51d614.png",[BD] Independent TV
+- w_300,q_85/FHz5PJwBcqxnFHJBdAqW/posters/419869ac-8ddf-4909-86c1-b69f0a3adf13.png",[BD] Nexus TV
+- w_300,q_85/Ii5_-JQBv9knK3AHLDV3/posters/d961cc87-81b6-4b30-8414-8c0af2774818.webp",[BD] Sony MAX 2
+- w_300,q_85/JiK-_poBEef-9-uVZv6L/posters/757a328e-70d6-45de-b093-0a843c69ade7.png",[BD] Bangla TV
+- w_300,q_85/KC6x-JQBv9knK3AHqjYc/posters/55e554f1-dbbb-47bd-97fe-fca878726c4c.webp",[BD] Discovery HD
+- w_300,q_85/KECGB54BuUSiBsg_dHyj/posters/58af9c58-ed80-458c-af13-cf381680cec6.png",[BD] Rajdhani TV
+- w_300,q_85/KS6x-JQBv9knK3AHwDZy/posters/6594d216-aaca-4eee-b6f5-bbc6b80feb15.webp",[BD] Discovery
+- w_300,q_85/Ly6C-JQBv9knK3AHOjXt/posters/252e64ca-8d99-46e7-a951-e10c1703c11d.webp",[BD] Sony PIX HD
+- w_300,q_85/MC6C-JQBv9knK3AHUzUT/posters/a8c32fd3-2ba7-437c-85ac-de2f1b2fa6ca.webp",[BD] Sony BBC Earth HD
+- w_300,q_85/MyK__poBEef-9-uVmf5l/posters/1eadef5b-28e7-4dc2-b42f-c67a3357c9a0.png",[BD] Asian TV
+- w_300,q_85/Ni61-JQBv9knK3AHcDYc/posters/c16e8633-6b2a-401a-9cd6-ac26a4fcdedb.webp",[BD] Animal Planet HD
+- w_300,q_85/Ny61-JQBv9knK3AHgzZ7/posters/0909b36a-afd5-426a-93b3-4512800977db.webp",[BD] Animal Planet
+- w_300,q_85/OnSlPJYBcqxnFHJB6lFX/posters/d9ccb2a6-227f-4a41-8714-efaddab5cf5e.png",[BD] Zee Bollywood
+- w_300,q_85/PC6F-JQBv9knK3AHlTUO/posters/fb0243ba-39a0-4101-a78c-c197be550c6c.webp",[BD] B4U Movies APAC
+- w_300,q_85/PS6F-JQBv9knK3AHqjVz/posters/0f83ee72-be0f-4861-94df-30b158d3df8d.webp",[BD] B4U Music
+- w_300,q_85/PS_La5oBNnOkwJLWLRN_/posters/e8c444fd-ee3b-4bf3-bb0a-f969bc295f82.png",[BD] Ekattor TV
+- w_300,q_85/Pc3RD5YBtpl-Sbt7doxr/posters/33d667ae-bcc3-4f6b-b376-76c552136923.png",[BD] Zee Action
+- w_300,q_85/PiL635oBEef-9-uV2uCe/posters/36f380e0-6c71-4b27-a73b-2afb3ce7e982.png",[BD] Jamuna TV
+- w_300,q_85/QMwWnZUBtpl-Sbt7S2sx/posters/8cad9a82-842a-47bf-a060-f17011f11c07.png",[BD] & Pictures HD
+- w_300,q_85/T9O9X5UBm1RY_In7UXFv/posters/30e0f372-eb3e-4cf9-be1e-b196a40c2fc7.png",[BD] HUM Masala
+- w_300,q_85/U3QEd5YBcqxnFHJBpYzc/posters/8bc7ae1b-1a46-4b76-bdb1-13c7dbd3a95c.png",[BD] Zee Cafe
+- w_300,q_85/Uy6Q-JQBv9knK3AHcDUQ/posters/01709bcd-6d53-4710-a64f-bc49cecf1d61.webp",[BD] Eurosport HD
+- w_300,q_85/VC6Q-JQBv9knK3AHhTXt/posters/63e79814-8fcf-4c3e-bb66-408b2a402613.webp",[BD] CNN
+- w_300,q_85/V__o054BObUt2AG6LL5C/posters/84590b8d-6430-4ba8-a0a5-757bf2f57c05.png",[BD] WC Match Recap
+- w_300,q_85/WtPBX5UBm1RY_In7mXEU/posters/188d51f6-aeef-41ed-835b-e25ff911e209.png",[BD] HUM Sitaray
+- w_300,q_85/WyPuDJsBEef-9-uVUA_z/posters/ea20055c-a824-443c-8083-ce8e2da8b922.png",[BD] Channel S
+- w_300,q_85/ay7uX5UBv9knK3AHs6TI/posters/deb3c186-b2e1-4a91-aafb-d86f9128b851.png",[BD] Investigation Discovery HD
+- w_300,q_85/b60Ss5UBrjBfS2_RJPb8/posters/2e5b8ff3-9deb-4040-947e-4ce6a4674ef0.png",[BD] Toffee Movies
+- w_300,q_85/bns4l5sBcqxnFHJBVZ32/posters/feaf9f3d-cc3b-4a3d-81a3-2cb703e561eb.png",[BD] Bijoy TV
+- w_300,q_85/jehEA54BIxFjn23xAmdw/posters/2c276556-cbcd-4467-b627-4394bb20f250.png",[BD] Islamic TV
+- w_300,q_85/kK2aX5UBrjBfS2_RBcKf/posters/ba5dd8dc-4f87-414a-b57f-c9ecdeda5253.png",[BD] Zee Bangla
+- w_300,q_85/ltPQX5UBm1RY_In7b3F1/posters/d039d9df-9877-4969-a0b6-56888ebe2385.png",[BD] Zee TV HD
+- w_300,q_85/mC6W-JQBv9knK3AHfDWA/posters/d2a02d82-fde4-4769-a6d9-95c0560e2120.webp",[BD] Cartoon Network
+- w_300,q_85/ny6W-JQBv9knK3AHujXC/posters/7e7c2afe-a663-4c09-983a-2d0fa0f1ca9a.webp",[BD] POGO
+- w_300,q_85/o3v235oBcqxnFHJBkAdC/posters/159af631-796d-4342-a2a7-c272f32bcd32.png",[BD] Ekhon TV
+- w_300,q_85/py5j-JQBv9knK3AHxDTY/posters/ea3358b9-2bec-4615-a889-daa2e396c74c.webp",[BD] Sony Ten Sports 1 HD
+- w_300,q_85/qnv835oBcqxnFHJBuQcB/posters/348dfac3-c1e0-485d-a72b-3d282c9e2c73.png",[BD] Channel i
+- w_300,q_85/ra2x_pQBrjBfS2_RWG9l/posters/795170c2-ec78-457e-9fa0-54a23d23361c.webp",[BD] Sony Ten Cricket
+- w_300,q_85/sy5m-JQBv9knK3AHYTTk/posters/5e40bf0e-633f-4d37-a3b2-3d606f0ac19a.png",[BD] Sony Ten Sports 2 HD
+- w_300,q_85/vi5n-JQBv9knK3AHqzTC/posters/d171fd4d-0369-4213-b0c5-e241974f5459.png",[BD] Sony Ten Sports 5 HD
+- w_300,q_85/wCM3l5sBEef-9-uVXFvD/posters/d80f7aee-5bd7-4edc-97eb-ead0e3ebbe09.png",[BD] Ananda TV
+- w_300,q_85/wHLVIJ4B7a1HdMSjaGLJ/posters/83b89557-3ae8-4ca8-8c5d-3c617359c738.png",[BD] NTV
+- w_300,q_85/xi6xX5UBv9knK3AH9aMk/posters/f4db1c12-b10f-46e8-a09b-e0efb8820970.png",[BD] Sony Aath
+- w_300,q_85/zUGrjZ4BuUSiBsg_1BeE/posters/bf5a8ad8-3996-44f8-80cb-df33f4d53d0f.png",[BD] FIFA WC CHANNEL 1
+
+### Animation (1 unique channels)
+- 3ABN Kids Network
+
+### Auto (1 unique channels)
+- 30A We Love Cars (720p)
+
+### Bangla Channel (54 unique channels)
+- 71 TV
+- ATN BANGLA
+- ATN Bangla
+- ATN Bangla UK
+- BANGLA VISION HD
+- BONGO DRAMAS
+- BTV
+- BTV HD
+- BTV World
+- BTV 🇧🇩
+- Bangla TV Europe
+- Bangla Vision
+- Bangla Vision TV
+- BanglaVision
+- CHANNEL 24
+- CHANNEL 9 HD
+- CHANNEL I HD
+- Channel 24
+- Channel 24  🇧🇩
+- Channel 24 HD
+- Channel 24 🇧🇩
+- Channel 9
+- Channel 9 HD
+- Channel I
+- Channel I HD
+- DEPTO BANGLA HD
+- Deepto TV
+- Deepto TV HD
+- Dippto TV
+- Dipto TV
+- EKUSHEY TV
+- FalconCast
+- G-TV
+- GAZI TV HD
+- GAZI TV HD (Source 2)
+- GTV
+- Gazi TV
+- Green TV
+- MAASRANGA TV HD
+- MASSRANGA
+- MY TV HD
+- Maasranga TV
+- N TV
+- NAGORIK TV
+- NTV
+- NTV UK
+- RTV HD
+- SA TV
+- SATV
+- SRK TV
+- Sangsad
+- Srk Tv
+- YES TV HD (FIFA-22)
+- pcv
+
+### Bangla News (33 unique channels)
+- ABP Ananda
+- ATN News
+- Calcutta News
+- Channel 1 News 4K
+- Channel 1 News HD 🇧🇩
+- DBC News HD
+- EKATTOR TV HD
+- Ekattor HD
+- Ekattor HD 71 🇧🇩
+- INDEPENDENT
+- INDEPENDENT TV
+- Independent TV
+- JAMUNA TV
+- Jamuna
+- Jamuna TV
+- Jumuna TV 🇧🇩
+- Kolkata TV
+- NEWS 24
+- News 24 HD
+- News18 Bangla News
+- News24 HD
+- R Bangla
+- R Plus News
+- SOMOY TV
+- Somoy
+- Somoy TV
+- Somoy TV  🇧🇩
+- Somoy TV 🇧🇩
+- Star News
+- Star News HD 🇧🇩
+- TV9 Bangla
+- Tv9 Bangla
+- Zee 24 Ghanta
+
+### Business (1 unique channels)
+- 30A Investment Pitch (720p)
+
+### Comedy (6 unique channels)
+- 13 Humor (1080p)
+- 30A Ridiculous TV (720p)
+- 3Cat El búnquer (1080p)
+- Comedy Central
+- Comedy TV
+- Cozi TV
+
+### Cricket (15 unique channels)
+- A Sports HD 🇵🇰
+- EuroSports HD 🇮🇳
+- IPL 2026
+- PTV Sport HD 🇧🇩 📡✴
+- PTV Sports HD 🇵🇰
+- PTV Sports pk HD
+- Sony Sports 1 HD 🇮🇳
+- Sony Sports 2 HD 🇮🇳
+- Sony Sports 5 HD 🇮🇳
+- Sony-Ten-Cricket HD
+- T SPORTS HD
+- T SPORTS HD (Source 2)
+- T Sports HD
+- Willow Extra Live
+- Willow HD 🇺🇸
+
+### Documentary (40 unique channels)
+- 30A Loomered TV
+- ACCU WEATHER
+- Amazon SAT
+- BBC EARTH HD
+- BBC Earth
+- BBC Earth US
+- BBC Lifestyle
+- CGTN Docment
+- Colors Infinity SD
+- Court TV
+- Crime & Investigation Network
+- Delicious
+- Digital Fashion
+- Discover Pakistan TV
+- Discovery Bangla
+- Discovery Channel
+- Discovery Family Channel
+- Discovery HD
+- Discovery Life
+- Discovery Science
+- Disney Channel
+- FASHION ONE
+- Food Food
+- INSIGHT
+- Luxel HD
+- Luxell
+- Nat Geo HD
+- OUTDOOR CHANNEL 🇺🇸
+- Program Promo
+- REAL WILD 🇬🇧
+- Sochi 24 HD 🇷🇺
+- TLC HD
+- Travel XP English
+- Travel XP English EU
+- Travel XP English NZ
+- Travel XP English S
+- TravelXP
+- Wild Earth
+- Wild Life
+- Wild Nature
+
+### Entertainment (21 unique channels)
+- 13 Entretención (720p)
+- 13 Realities (1080p)
+- 13 Ulica (1080p)
+- 13th Street Universal HD (1080p)
+- 1KZN TV (576p)
+- 20 Mediaset [Geo-blocked]
+- 2x2 (576i)
+- 30A Georgia Hollywood Review TV (720p)
+- 30A Sidewalks (720p)
+- 30A Television Channel (720p)
+- 4U TV (720p)
+- 4ever Theater
+- 4seven (576p)
+- 5AAB TV (720p) [Not 24/7]
+- 5SELECT (576p)
+- 5STAR (576p)
+- 8TV
+- 9Gem (720p) [Geo-blocked]
+- 9Go! (720p) [Geo-blocked]
+- E! Entertainment
+- Live Channel
+
+### International News (44 unique channels)
+- ALJAZEERA
+- ALJAZEERA HD
+- Al Jazeera
+- BBC WORLD NEWS
+- BBC World
+- BBC World News
+- Bloomberg TV
+- Breaking News
+- C-SPAN
+- CGTN
+- CGTN News
+- CNA News
+- CNBC Indonesia (EN) 🛜
+- CNN
+- CNN (US)
+- CNN NEWS
+- DW
+- DW English
+- DW English 📶_📺
+- DW NEWS
+- DW Naws
+- FOX News (AU) 🛜
+- France 24
+- France 24 English (720p)
+- France News 24
+- Global News (US)
+- India Today
+- Iran International News tv
+- Iran International(EN) 🛜
+- NDTV English
+- NDTV Hindi
+- NDTV NEWS
+- NHK World
+- News Max 2
+- Press TV Iran
+- RT NEWS USA
+- RT News (EN) 🛜
+- RT Now
+- RTNEWS GLOBAL
+- Sky News
+- T Global News (Canada)
+- TRT WORLD
+- Times Of India
+- Wion News
+
+### Kids (24 unique channels)
+- 13 Kids (1080p)
+- 4 Fun Kids (576i) [[Not 24/7]]
+- BBC Cbeebies
+- Boomerang
+- BuddyStar
+- BuddyStar HD
+- Cartoon Network
+- DURONTO TV
+- Disney XD
+- Funny Junior
+- Funny Junior HD
+- Jungle Book
+- Kids Star
+- Kids Stars
+- Lucky Family
+- Nikki
+- Nikky
+- PBS Kids
+- Rongeen TV
+- Smarty
+- Tom & Jarry
+- Unnamed Channel
+- ZB Cartoon
+- Zoo Moo
+
+### Lifestyle (6 unique channels)
+- 10 Bold Adelaide (1080p)
+- 13 Prime (720p)
+- 30A Luxe Life Discovered (720p)
+- 36.6 TV
+- 9Life (720p) [Geo-blocked]
+- CNBC
+
+### Movies (77 unique channels)
+- 24 Hour Free Movies
+- 27 TwentySeven [Geo-blocked]
+- 30A TV Classic Movies (720p)
+- Action Hollywood Movies
+- B4U Kadak
+- BET
+- Bangla +
+- Bangla Movies
+- Bounce TV
+- Bowery Classics | Distro TV
+- CBS
+- CBS News 24/7
+- CMT
+- CineLife | Distro
+- CineLife | EUA
+- CineLife | Plex
+- Cineedge
+- Cineedge HD
+- Cinemax
+- Cinepride | EUA | Galxy TV 2
+- Cinepride | EUA | Galxy TV 3
+- Comet TV
+- Comet | Stirr
+- Crime
+- Crimes
+- Electric Now | EUA 6
+- FrightFlix | Galxy TV 2
+- FrightFlix | Galxy TV 3
+- G Series Drama 🇧🇩
+- G-Serise
+- Galxy TV
+- Goldmines
+- Goldmines Bollywood
+- Goldmines Movies
+- Goldmines Movies 2
+- HBO
+- HBO 2
+- HBO Comedy
+- HBO Zone
+- Hi-YAH!
+- Horror Machine | Local Now
+- Intelligence
+- KMovies 2 | legenda em inglês
+- KMovies 3 | legenda em inglês
+- KMovies | legenda em inglês
+- Live Channel
+- Lotus
+- Manoranjan Grend
+- Manoranjan Prime
+- MyTime Movie Network | EUA
+- Originals
+- SETMAX HD
+- SONY MAX 2
+- SONY PIX HD
+- Screem
+- Sheemaroo Bollywood
+- Star Gold
+- Superrix
+- Superrix HD
+- The Archive | EUA 5
+- The Archive | EUA 6
+- The Lone Star Channel | Distro
+- The Lone Star Channel | Distro | link 2
+- The Lone Star Channel | Rakuten
+- The Movie Club
+- True Stories
+- Truestory
+- Uniques
+- Uniques HD
+- Watch It Scream! | Galxy TV 2
+- Watch It Scream! | Galxy TV 3
+- ZB Cinema
+- Zee Action
+- Zee Anmol TV
+- Zee Cinema HD
+- ТНТ International
+- ТНТ4 International
+
+### Music (28 unique channels)
+- 13 Festival (1080p)
+- 15+ Music (1080p)
+- 30A Music (720p)
+- 3ABN Praise Him Music Network
+- 4 Fun TV (576i) [Not 24/7]
+- 4 Kurd
+- 7 RadioVisione (720p)
+- 7 YOU & ME (720p)
+- 7S Music (576p)
+- 8XM (576p)
+- 9X Jalwa (1080p)
+- 9X Jhakaas (1080p)
+- 9X Tashan (1080p)
+- 9XM
+- 9XM (1080p)
+- Bengla Beats
+- Big Magic
+- Dhoom Music
+- E24
+- GAAN BANGLA
+- Hindi Hits HD
+- Joo Music
+- Live Channel
+- Music India
+- Party Univers
+- Party Universe
+- Pluto TV MTV (Brazil) (720p)
+- YRF Music HD
+
+### Religious (42 unique channels)
+- 15.1 BPB (720p)
+- 3ABN Canada (720p)
+- 3ABN Dare To Dream Network
+- 3ABN English
+- 3ABN French
+- 3ABN International Network
+- 3ABN Latino
+- 3ABN Proclaim! Network
+- 3ABN TV Uganda (720p) [Not 24/7]
+- 4E (1080p)
+- AL EKHBARIA
+- AL ISTIQAMA
+- AL QAMAR
+- AL SUNNAH AL NABAWIYAH TV
+- AL SUNNAH TV
+- AL Sunnah TV
+- ALMASIRA MUBASHER
+- Al Quran
+- Arabica TV
+- Arihant TV
+- BAHRAIN QURAN
+- EWTN TV
+- God TV
+- Islamic TV
+- Live Quran TV 🎯 📡
+- Madani TV
+- Madina live
+- Makka live
+- Makkah TV
+- Noor Tv
+- Peace TV Bangla
+- Peace TV English
+- Peace TV Urdu
+- Peace tv Bangla
+- QURAN
+- QURAN KAREEM TV
+- QURAN RADIOTV SMC
+- SHARJAH QURAN
+- Saudi Quran
+- Saudia Arabia
+- Sunnah Tv
+- WAZ TV 🎯 📡
+
+### Sports & Football (75 unique channels)
+- A SPOR
+- ACC Network
+- Altitude Sports
+- Animal Planet
+- BBC America
+- BBC One
+- Bein Sports 1 720p
+- Bein Sports 1🎯
+- Big Ten Network
+- Bioscope Sports Live
+- Btv
+- Crazy Ex
+- Crazy_ex
+- D Sports
+- DAZN 1
+- DD SPORTS
+- DD Sports 2.0
+- DIRECTV Sports
+- DIRECTV Sports +
+- ESPN
+- ESPN News
+- ESPN S1
+- ESPN S2
+- ESPN U
+- ESPN2
+- FIFA+
+- FOX
+- FOX Sports
+- FS1
+- Fighter
+- Fighters
+- Flash Guys
+- Flash Guys HD
+- Football World Cup 202
+- Football World Cup 2026
+- Football World Cup 2026 4K
+- Fox Sports 1
+- Fubo Sports Network (1080p) [Geo-blocked]
+- Live Sports
+- M6
+- Motor Vision
+- MuxIP-SportsFirst TV🎯
+- PTV 4K
+- Real Madrid tv Football
+- Redbull TV
+- S Football
+- SONY SIX
+- SONY TEN 1 HD
+- SONY TEN 2 HD
+- SONY TEN 3
+- SPORTS 18 HD (FIFA-22)
+- Skynet Sports 1
+- Skynet Sports 2
+- Skynet Sports 6
+- Skynet Sports HD
+- Somoy
+- Sony Sports Ten 3 HD
+- Sony Sports Ten 5
+- Sports Legends
+- Sports Range
+- Star Sports 1 HD
+- Star Sports 2 HD Hindi
+- T Sports HD
+- TNS 1
+- TNS 2
+- TVP Sports
+- TVRI sport
+- Telemundo
+- Thunder Er
+- Tudn Sports
+- Unite 8 Sports 1 HD
+- Unite 8 Sports 2 HD
+- WIN Sports
+- beIN SPORTS 1 UHD
+- sportrange
+
+### Doms9 Base (152 unique channels)
+- A&E TV
+- ABC
+- ACC Network
+- AMC
+- AXS TV
+- Adult Swim
+- Altitude Sports
+- Animal Planet
+- Aspire
+- BBC America
+- BBC One
+- BBC World News
+- BET
+- Big Ten Network
+- Bloomberg TV
+- Boomerang
+- Bounce TV
+- Bravo TV
+- Buzzr
+- C-SPAN
+- CBS
+- CBS News 24/7
+- CBS Sports Golazo Network
+- CBS Sports Network
+- CMT
+- CNBC
+- CNN
+- CW
+- Cartoon Network
+- Cinemax
+- Comedy Central
+- Comedy TV
+- Comet TV
+- Cooking Channel
+- Court TV
+- Cozi TV
+- Crime & Investigation Network
+- DIRECTV Sports
+- DIRECTV Sports +
+- Discovery Channel
+- Discovery Family Channel
+- Discovery Life
+- Discovery Science
+- Disney Channel
+- Disney Jr
+- Disney XD
+- E! Entertainment
+- ESPN
+- ESPN News
+- ESPN U
+- ESPN2
+- FUSE
+- FX
+- FX Movie Channel
+- FXX
+- FYI TV
+- Food Network
+- Fox
+- Fox Business
+- Fox News
+- Fox Sports 1
+- Fox Sports 2
+- Freeform TV
+- Game Show Network
+- Golf Channel
+- Grit TV
+- HBO
+- HBO 2
+- HBO Comedy
+- HBO Zone
+- HLN TV
+- Hallmark Channel
+- Hallmark Family
+- Hallmark Mystery
+- History Channel
+- INSP
+- ION TV
+- ITV1
+- Investigation Discovery
+- Lifetime
+- Lifetime Movie Network
+- MLB Network
+- MSG
+- MSNBC
+- MTV
+- Marquee Sports Network
+- MotorTrend TV
+- NBA TV
+- NBC
+- NBC Sports Bay Area
+- NBC Sports Boston
+- NBC Sports California
+- NBC Sports NOW
+- NBC Sports Philadelphia
+- NESN
+- NFL Network
+- NHL Network
+- Nat Geo
+- Nat Geo Wild
+- NewsNation
+- Newsmax TV
+- Nick Jr
+- Nickelodeon
+- Nicktoons
+- Outdoor Channel
+- Ovation
+- Oxygen
+- PBS Kids
+- Paramount Network
+- Pop TV
+- Premier Sports 1
+- Premier Sports 2
+- Reelz Channel
+- SEC Network
+- STV
+- Showtime
+- Showtime Extreme
+- Sky Sports Football
+- Sky Sports News
+- Sky Sports Premier League
+- Smithsonian Channel
+- Sony Movie Channel
+- Space City Home Network
+- Spectrum SportsNet LA Dodgers
+- Spectrum SportsNet Lakers
+- SportsNet New York
+- Sportsnet 360
+- Sportsnet East
+- Sportsnet One
+- Starz
+- Starz Encore Classic
+- Syfy
+- TBS
+- TLC
+- TNT
+- TSN1
+- TSN2
+- TV Land
+- TV One
+- Telemundo
+- Tennis Channel
+- The Weather Channel
+- Turner Classic Movies
+- USA Network
+- VH1
+- Vice TV
+- We Tv
+- Willow Cricket
+- YES Network
+- beIN Sports 1
+- getTV
+- truTV
+
+### Doms9 US TV (326 unique channels)
+- A&E TV
+- ABC
+- ACC Network
+- AMC
+- AXS TV
+- Adult Swim
+- Altitude Sports
+- Animal Planet
+- Aspire
+- BBC America
+- BBC One
+- BBC World News
+- BET
+- Big Ten Network
+- Bloomberg TV
+- Boomerang
+- Bounce TV
+- Bravo TV
+- Buzzr
+- C-SPAN
+- CBS
+- CBS News 24/7
+- CBS Sports Golazo Network
+- CBS Sports Network
+- CMT
+- CNBC
+- CNN
+- CW
+- Cartoon Network
+- Cinemax
+- Comedy Central
+- Comedy TV
+- Comet TV
+- Cooking Channel
+- Court TV
+- Cozi TV
+- Crime & Investigation Network
+- DIRECTV Sports
+- DIRECTV Sports +
+- Discovery Channel
+- Discovery Family Channel
+- Discovery Life
+- Discovery Science
+- Disney Channel
+- Disney Jr
+- Disney XD
+- E! Entertainment
+- ESPN
+- ESPN News
+- ESPN U
+- ESPN2
+- FUSE
+- FX
+- FX Movie Channel
+- FXX
+- FYI TV
+- Food Network
+- Fox
+- Fox Business
+- Fox News
+- Fox Sports 1
+- Fox Sports 2
+- Freeform TV
+- Game Show Network
+- Golf Channel
+- Grit TV
+- HBO
+- HBO 2
+- HBO Comedy
+- HBO Zone
+- HLN TV
+- Hallmark Channel
+- Hallmark Family
+- Hallmark Mystery
+- History Channel
+- INSP
+- ION TV
+- ITV1
+- Investigation Discovery
+- Lifetime
+- Lifetime Movie Network
+- MLB Network
+- MSG
+- MSNBC
+- MTV
+- Marquee Sports Network
+- MotorTrend TV
+- NBA TV
+- NBC
+- NBC Sports Bay Area
+- NBC Sports Boston
+- NBC Sports California
+- NBC Sports NOW
+- NBC Sports Philadelphia
+- NESN
+- NFL Network
+- NHL Network
+- Nat Geo
+- Nat Geo Wild
+- NewsNation
+- Newsmax TV
+- Nick Jr
+- Nickelodeon
+- Nicktoons
+- Outdoor Channel
+- Ovation
+- Oxygen
+- PBS Kids
+- Paramount Network
+- Pop TV
+- Premier Sports 1
+- Premier Sports 2
+- Reelz Channel
+- SEC Network
+- STV
+- Showtime
+- Showtime Extreme
+- Sky Sports Football
+- Sky Sports News
+- Sky Sports Premier League
+- Smithsonian Channel
+- Sony Movie Channel
+- Space City Home Network
+- Spectrum SportsNet LA Dodgers
+- Spectrum SportsNet Lakers
+- SportsNet New York
+- Sportsnet 360
+- Sportsnet East
+- Sportsnet One
+- Starz
+- Starz Encore Classic
+- Syfy
+- TBS
+- TLC
+- TNT
+- TSN1
+- TSN2
+- TV Land
+- TV One
+- Telemundo
+- Tennis Channel
+- The Weather Channel
+- Turner Classic Movies
+- USA Network
+- VH1
+- Vice TV
+- We Tv
+- Willow Cricket
+- YES Network
+- [Basketball] Chicago Sky at Phoenix Mercury | English (STRMCNTR)
+- [Basketball] Dallas Wings at New York Liberty | English (STRMCNTR)
+- [Basketball] Oklahoma City Thunder at Utah Jazz | English (STRMCNTR)
+- [Bolivia Division Profesional] GV San Jose vs Tomayapo (FAWA)
+- [Brazil Serie B] Athletic Club vs Operario-PR (FAWA)
+- [Brazilian Serie B] Athletic vs Operário PR (WATCHFTY)
+- [Copa Del Mundo 2026] Argentina vs Egipto | Disney+ (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | Dsports (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | Fox ONE USA (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | Gen PY (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | La 1 ES (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | Sportv BR (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | TV Publica (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | TYC Sports (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | Telefe (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | Telemundo USA (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | Trece PY (STRMXHD)
+- [Copa Del Mundo 2026] Argentina vs Egipto | VIX + Mundial (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | America TV (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Canal 5 MX (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Chilevision (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Disney+ (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Dsports (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Fox ONE USA (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Gen PY (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | La 1 ES (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Sportv BR (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | TUDN MX (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Telemundo USA (STRMXHD)
+- [Copa Del Mundo 2026] Suiza vs Colombia | Trece PY (STRMXHD)
+- [Ecuador Liga Pro] Aucas vs Guayaquil City (FAWA)
+- [FIFA World Cup] Arabic Feed 1 (XYZSTRM)
+- [FIFA World Cup] Arabic Feed 2 (XYZSTRM)
+- [FIFA World Cup] Bulgarian Feed (STRMHUB)
+- [FIFA World Cup] Colombia vs Switzerland (STRMSGATE)
+- [FIFA World Cup] Croatian Feed (STRMHUB)
+- [FIFA World Cup] Dutch Feed (STRMHUB)
+- [FIFA World Cup] Egypt vs Argentina (STRMSGATE)
+- [FIFA World Cup] English Feed 1 (STRMHUB)
+- [FIFA World Cup] English Feed 2 (STRMHUB)
+- [FIFA World Cup] English Feed 3 (STRMHUB)
+- [FIFA World Cup] English Feed 4 (STRMHUB)
+- [FIFA World Cup] English Feed 5 (STRMHUB)
+- [FIFA World Cup] English Feed 6 (STRMHUB)
+- [FIFA World Cup] English Feed | BBC (XYZSTRM)
+- [FIFA World Cup] English Feed | FOX 1 (XYZSTRM)
+- [FIFA World Cup] English Feed | FOX 2 (XYZSTRM)
+- [FIFA World Cup] English Feed | FS1 (XYZSTRM)
+- [FIFA World Cup] English Feed | ITV 1 (XYZSTRM)
+- [FIFA World Cup] English Feed | ITV 2 (XYZSTRM)
+- [FIFA World Cup] English Feed | TSN (XYZSTRM)
+- [FIFA World Cup] French Feed (XYZSTRM)
+- [FIFA World Cup] French Feed 1 (STRMHUB)
+- [FIFA World Cup] French Feed 2 (STRMHUB)
+- [FIFA World Cup] German Feed 1 (STRMHUB)
+- [FIFA World Cup] German Feed 2 (STRMHUB)
+- [FIFA World Cup] German Feed 3 (STRMHUB)
+- [FIFA World Cup] German Feed 4 (STRMHUB)
+- [FIFA World Cup] Italian Feed (STRMHUB)
+- [FIFA World Cup] Polish Feed (STRMHUB)
+- [FIFA World Cup] Portuguese Feed (STRMHUB)
+- [FIFA World Cup] Serbian Feed (STRMHUB)
+- [FIFA World Cup] Spanish Feed 1 (STRMHUB)
+- [FIFA World Cup] Spanish Feed 2 (STRMHUB)
+- [FIFA World Cup] Spanish Feed 3 (STRMHUB)
+- [FIFA World Cup] Spanish Feed 4 (STRMHUB)
+- [FIFA World Cup] Spanish Feed | Telemundo (XYZSTRM)
+- [FIFA World Cup] Turkish Feed (STRMHUB)
+- [FIFA World Cup] Ukrainian Feed (STRMHUB)
+- [Fighting] WWE NXT (ROXIE)
+- [Fútbol] Suiza vs Colombia | ESPAÑOL 1 (STP)
+- [Fútbol] Suiza vs Colombia | ESPAÑOL 2 (STP)
+- [Fútbol] Suiza vs Colombia | ESPAÑOL 3 (STP)
+- [LigaPro Ecuador] Aucas vs Guayaquil City (WATCHFTY)
+- [LigaPro] Aucas vs Guayaquil City | Zapping EC (STRMXHD)
+- [Live Event] Atlanta Hawks vs Memphis Grizzlies (FSPRTS)
+- [Live Event] Oklahoma City Thunder vs Utah Jazz (FSPRTS)
+- [MLB Baseball] Baltimore Orioles vs Chicago Cubs (FAWA)
+- [MLB Baseball] Chicago White Sox vs Boston Red Sox (FAWA)
+- [MLB Baseball] Cincinnati Reds vs Philadelphia Phillies (FAWA)
+- [MLB Baseball] Detroit Tigers vs Athletics (FAWA)
+- [MLB Baseball] Los Angeles Dodgers vs Colorado Rockies (FAWA)
+- [MLB Baseball] Miami Marlins vs Seattle Mariners (FAWA)
+- [MLB Baseball] Minnesota Twins vs Cleveland Guardians (FAWA)
+- [MLB Baseball] New York Mets vs Kansas City Royals (FAWA)
+- [MLB Baseball] Pittsburgh Pirates vs Atlanta Braves (FAWA)
+- [MLB Baseball] San Diego Padres vs Arizona Diamondbacks (FAWA)
+- [MLB Baseball] San Francisco Giants vs Toronto Blue Jays (FAWA)
+- [MLB Baseball] St Louis Cardinals vs Milwaukee Brewers (FAWA)
+- [MLB Baseball] Tampa Bay Rays vs New York Yankees (FAWA)
+- [MLB Baseball] Texas Rangers vs Los Angeles Angels (FAWA)
+- [MLB Baseball] Washington Nationals vs Houston Astros (FAWA)
+- [MLB] Angels vs Rangers (WEBCAST)
+- [MLB] Arizona Diamondbacks at San Diego Padres | English (STRMCNTR)
+- [MLB] Arizona Diamondbacks vs San Diego Padres (MP66)
+- [MLB] Arizona Diamondbacks vs San Diego Padres (ROXIE)
+- [MLB] Astros vs Nationals (WEBCAST)
+- [MLB] Athletics vs Detroit Tigers (ROXIE)
+- [MLB] Athletics vs Tigers (WEBCAST)
+- [MLB] Atlanta Braves vs Pittsburgh Pirates (ROXIE)
+- [MLB] Baltimore Orioles vs Chicago Cubs (WATCHFTY)
+- [MLB] Baltimore Orioles vs Chicago Cubs (iSTRMEAST)
+- [MLB] Boston Red Sox at Chicago White Sox | English (STRMCNTR)
+- [MLB] Boston Red Sox vs Chicago White Sox (ROXIE)
+- [MLB] Braves vs Pirates (WEBCAST)
+- [MLB] Brewers vs Cardinals (WEBCAST)
+- [MLB] Chicago Cubs vs Baltimore Orioles (ROXIE)
+- [MLB] Cincinnati Reds - Philadelphia Phillies (EMBEDHD)
+- [MLB] Cleveland Guardians at Minnesota Twins | English (STRMCNTR)
+- [MLB] Cleveland Guardians vs Minnesota Twins (ROXIE)
+- [MLB] Colorado Rockies at Los Angeles Dodgers | English (STRMCNTR)
+- [MLB] Colorado Rockies vs Los Angeles Dodgers (MP66)
+- [MLB] Colorado Rockies vs Los Angeles Dodgers (ROXIE)
+- [MLB] Cubs vs Orioles (WEBCAST)
+- [MLB] Diamondbacks vs Padres (WEBCAST)
+- [MLB] Guardians vs Twins (WEBCAST)
+- [MLB] Houston Astros vs Washington Nationals (ROXIE)
+- [MLB] Jays vs Giants (WEBCAST)
+- [MLB] Kansas City Royals vs New York Mets (ROXIE)
+- [MLB] Los Angeles Angels at Texas Rangers | English (STRMCNTR)
+- [MLB] Los Angeles Angels vs Texas Rangers (ROXIE)
+- [MLB] Los Angeles Dodgers - Colorado Rockies (EMBEDHD)
+- [MLB] Los Angeles Dodgers vs Colorado Rockies (WATCHFTY)
+- [MLB] Los Angeles Dodgers vs Colorado Rockies (iSTRMEAST)
+- [MLB] Mariners vs Marlins (WEBCAST)
+- [MLB] Miami Marlins vs Seattle Mariners (WATCHFTY)
+- [MLB] Miami Marlins vs Seattle Mariners (iSTRMEAST)
+- [MLB] Milwaukee Brewers at St. Louis Cardinals | English (STRMCNTR)
+- [MLB] Milwaukee Brewers vs St. Louis Cardinals (ROXIE)
+- [MLB] Minnesota Twins vs Cleveland Guardians (WATCHFTY)
+- [MLB] New York Mets - Kansas City Royals (EMBEDHD)
+- [MLB] New York Yankees vs Tampa Bay Rays (ROXIE)
+- [MLB] Philadelphia Phillies vs Cincinnati Reds (ROXIE)
+- [MLB] Phillies vs Reds (WEBCAST)
+- [MLB] Red Sox vs White Sox (WEBCAST)
+- [MLB] Rockies vs Dodgers (WEBCAST)
+- [MLB] Royals vs Mets (WEBCAST)
+- [MLB] San Diego Padres - Arizona Diamondbacks (EMBEDHD)
+- [MLB] San Diego Padres vs Arizona Diamondbacks (WATCHFTY)
+- [MLB] San Diego Padres vs Arizona Diamondbacks (iSTRMEAST)
+- [MLB] San Francisco Giants - Toronto Blue Jays (EMBEDHD)
+- [MLB] San Francisco Giants vs Toronto Blue Jays (WATCHFTY)
+- [MLB] San Francisco Giants vs Toronto Blue Jays (iSTRMEAST)
+- [MLB] Seattle Mariners vs Miami Marlins (ROXIE)
+- [MLB] St. Louis Cardinals vs Milwaukee Brewers (WATCHFTY)
+- [MLB] St. Louis Cardinals vs. Milwaukee Brewers | ESPN 7 (STRMXHD)
+- [MLB] Tampa Bay Rays vs. New York Yankees | ESPN 3 (STRMXHD)
+- [MLB] Texas Rangers - Los Angeles Angels (EMBEDHD)
+- [MLB] Texas Rangers vs Los Angeles Angels (WATCHFTY)
+- [MLB] Toronto Blue Jays at San Francisco Giants | English (STRMCNTR)
+- [MLB] Toronto Blue Jays vs San Francisco Giants (CDNTV)
+- [MLB] Toronto Blue Jays vs San Francisco Giants (ROXIE)
+- [MLB] Washington Nationals vs Houston Astros (WATCHFTY)
+- [MLB] Washington Nationals vs Houston Astros (iSTRMEAST)
+- [MLB] Yankees vs Rays (WEBCAST)
+- [NBA Basketball] Memphis Grizzlies vs Atlanta Hawks (FAWA)
+- [NBA Basketball] Utah Jazz vs Oklahoma City Thunder (FAWA)
+- [NBA Summer League] Hawks vs Grizzlies | NBA League Pass (STRMXHD)
+- [NBA Summer League] Thunder vs Jazz | NBA League Pass (STRMXHD)
+- [NBA Summer League] Utah Jazz vs Oklahoma City Thunder (WATCHFTY)
+- [NBA Summer League] Utah Jazz vs Oklahoma City Thunder (iSTRMEAST)
+- [NBA] Atlanta Hawks vs Memphis Grizzlies (ROXIE)
+- [NBA] Oklahoma City Thunder vs Utah Jazz (ROXIE)
+- [Nba Summer League] Utah Jazz - Oklahoma City Thunder (EMBEDHD)
+- [Soccer] Shelbourne vs Celtic (ROXIE)
+- [Soccer] Switzerland vs Colombia (ROXIE)
+- [WNBA Basketball] New York Liberty W vs Dallas Wings W (FAWA)
+- [WNBA Basketball] Phoenix Mercury W vs Chicago Sky W (FAWA)
+- [WNBA] New York vs. Dallas | ESPN 2 (STRMXHD)
+- [WNBA] Phoenix Mercury vs Chicago Sky (WATCHFTY)
+- [WNBA] Phoenix Mercury vs Chicago Sky (iSTRMEAST)
+- [WWE Wrestling] WWE NXT (FAWA)
+- [Wimbledon] 4tos de Final | Cobertura Internacional | ESPN 2 (STRMXHD)
+- [Wimbledon] 4tos de Final | Cobertura Regional | ESPN 3 (STRMXHD)
+- beIN Sports 1
+- getTV
+- truTV

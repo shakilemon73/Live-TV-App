@@ -42,19 +42,19 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-// Resilience Playback Buffer Constants
-const val LOW_LATENCY_MIN_BUFFER_MS = 15000
-const val LOW_LATENCY_MAX_BUFFER_MS = 45000
-const val LOW_LATENCY_BUFFER_FOR_PLAYBACK_MS = 2500
-const val LOW_LATENCY_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5000
+// Resilience Playback Buffer Constants - Engineered for Enterprise-Grade Snappy Start and Buffer Safety
+const val LOW_LATENCY_MIN_BUFFER_MS = 10000
+const val LOW_LATENCY_MAX_BUFFER_MS = 30000
+const val LOW_LATENCY_BUFFER_FOR_PLAYBACK_MS = 800
+const val LOW_LATENCY_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 2500
 
-const val STANDARD_MIN_BUFFER_MS = 45000
-const val STANDARD_MAX_BUFFER_MS = 90000
-const val STANDARD_BUFFER_FOR_PLAYBACK_MS = 3000
-const val STANDARD_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 6000
+const val STANDARD_MIN_BUFFER_MS = 20000
+const val STANDARD_MAX_BUFFER_MS = 60000
+const val STANDARD_BUFFER_FOR_PLAYBACK_MS = 1200
+const val STANDARD_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 3500
 
-const val LOW_LATENCY_BACK_BUFFER_MS = 10000
-const val STANDARD_BACK_BUFFER_MS = 20000
+const val LOW_LATENCY_BACK_BUFFER_MS = 15000
+const val STANDARD_BACK_BUFFER_MS = 30000
 
 @UnstableApi
 data class PlaybackDiagnostics(
@@ -94,6 +94,7 @@ fun VideoPlayer(
 
     val scope = rememberCoroutineScope()
     var retryCount by remember(videoUrl) { mutableStateOf(0) }
+    var consecutiveHttpErrors by remember(videoUrl) { mutableStateOf(0) }
     val failedUrlsState = remember(streams) { mutableStateOf(emptySet<String>()) }
     var prepareStartTime by remember(videoUrl) { mutableStateOf(0L) }
     var timeToFirstFrameMs by remember(videoUrl) { mutableStateOf(0L) }
@@ -133,10 +134,10 @@ fun VideoPlayer(
 
         // 1. Configure the Adaptive Track Selection Factory to drop quality aggressively but upgrade conservatively
         val trackSelectionFactory = AdaptiveTrackSelection.Factory(
-            /* minDurationForQualityIncreaseMs = */ 12000,  // Wait 12s of high bandwidth before upgrading quality to avoid toggle loops
-            /* maxDurationForQualityDecreaseMs = */ 1000,   // Instantly (1s) drop resolution if bandwidth plummets to avoid freezing
-            /* minDurationToRetainAfterDiscardMs = */ 15000, // Safe discard distance to maintain stream continuity
-            /* bandwidthFraction = */ 0.70f                // Assume only 70% of estimated bandwidth is usable to be cautious
+            /* minDurationForQualityIncreaseMs = */ 8000,   // Wait 8s of high bandwidth before upgrading quality to avoid toggle loops (Enterprise standard)
+            /* maxDurationForQualityDecreaseMs = */ 500,    // Instantly (0.5s) drop resolution if bandwidth plummets to avoid freezing
+            /* minDurationToRetainAfterDiscardMs = */ 12000, // Safe discard distance to maintain stream continuity
+            /* bandwidthFraction = */ 0.75f                // Assume 75% of estimated bandwidth is usable to optimize throughput
         )
         val trackSelector = DefaultTrackSelector(playerContext, trackSelectionFactory)
 
@@ -173,6 +174,9 @@ fun VideoPlayer(
         val basePlayerClient = com.example.data.CachedHttpClient.getBaseClient()
         val sessionHeaders = java.util.concurrent.ConcurrentHashMap<String, String>()
         val playerOkHttpClient = basePlayerClient.newBuilder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
@@ -192,21 +196,31 @@ fun VideoPlayer(
                 }
                 
                 val originalUrlString = originalRequest.url.toString()
-                val delimiterIndex = originalUrlString.indexOf("|").let { 
-                    if (it != -1) it else originalUrlString.indexOf("%7C", ignoreCase = true) 
+                
+                // Find the separator that starts the header parameters block (e.g., "|Referer=" or "%7CReferer=")
+                // We search for "|", "%7C", "%7c", "%257C", "%257c" using lastIndexOf to ensure we don't accidentally
+                // split on a pipe character encoded inside a query parameter (like a token or signature).
+                var delimiterIndex = -1
+                var delimiterLen = 0
+                
+                val delimiters = listOf("|", "%7C", "%7c", "%257C", "%257c")
+                for (delim in delimiters) {
+                    val idx = originalUrlString.lastIndexOf(delim)
+                    if (idx != -1 && idx > delimiterIndex) {
+                        delimiterIndex = idx
+                        delimiterLen = delim.length
+                    }
                 }
+                
                 if (delimiterIndex != -1) {
-                    val isPipe = originalUrlString[delimiterIndex] == '|'
-                    val delimiterLen = if (isPipe) 1 else 3
                     try {
                         val cleanUrlEncoded = originalUrlString.substring(0, delimiterIndex)
                         val headerParamsEncoded = originalUrlString.substring(delimiterIndex + delimiterLen)
                         
-                        val cleanUrl = try {
-                            java.net.URLDecoder.decode(cleanUrlEncoded, "UTF-8")
-                        } catch (e: Exception) {
-                            cleanUrlEncoded
-                        }
+                        // IMPORTANT: Do NOT URL-decode the entire clean URL because it will corrupt 
+                        // query parameter values (like tokens or signatures) that contain URL-encoded chars.
+                        // OkHttp expects a valid URL string which cleanUrlEncoded already is.
+                        val cleanUrl = cleanUrlEncoded
                         
                         // New stream started: clear previous session headers
                         sessionHeaders.clear()
@@ -362,6 +376,8 @@ fun VideoPlayer(
                 isBuffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_READY) {
                     hasError = false
+                    retryCount = 0
+                    consecutiveHttpErrors = 0
                     if (!hasReachedReady) {
                         hasReachedReady = true
                     }
@@ -376,35 +392,72 @@ fun VideoPlayer(
             override fun onPlayerError(error: PlaybackException) {
                 android.util.Log.e("VideoPlayer", "Playback error (code=${error.errorCodeName}, ${error.errorCode}). Message: ${error.message}, Cause: ${error.cause}")
 
-                if (retryCount < 3) {
-                    val backoffDelay = when (retryCount) {
-                        0 -> 1000L
-                        1 -> 2000L
-                        else -> 4000L
-                    }
-                    android.util.Log.w("VideoPlayer", "Playback error (code=${error.errorCodeName}). Retrying in ${backoffDelay}ms (Attempt ${retryCount + 1}/3)...")
-                    retryCount++
-                    scope.launch {
-                        delay(backoffDelay)
-                        if (exoPlayer != null) {
-                            isBuffering = true
-                            exoPlayer.prepare()
-                            exoPlayer.play()
-                        }
-                    }
-                } else {
-                    android.util.Log.e("VideoPlayer", "All 3 retries failed for current source: $videoUrl. Checking for other sources...")
+                // Detect if the error is 404 or connection timeout/failure
+                val httpStatusCode = getHttpStatusCode(error)
+                val is404 = httpStatusCode == 404 || error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && (error.message?.contains("404") == true)
+                val isConnectionTimeoutOrFailed = error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT || 
+                                                  error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                                                  error.message?.lowercase()?.contains("timeout") == true
+
+                android.util.Log.w("VideoPlayer", "Error diagnostic: httpStatusCode=$httpStatusCode, is404=$is404, isConnectionTimeoutOrFailed=$isConnectionTimeoutOrFailed")
+
+                if (is404 || isConnectionTimeoutOrFailed) {
+                    consecutiveHttpErrors++
+                    android.util.Log.w("VideoPlayer", "Consecutive HTTP/Network errors: $consecutiveHttpErrors/2")
+                }
+
+                val shouldFailoverImmediately = is404 || consecutiveHttpErrors >= 2
+
+                if (shouldFailoverImmediately) {
+                    android.util.Log.e("VideoPlayer", "Failing over immediately. 404/Connection timeout detected. Attempting to switch to secondary/backup manifest URL...")
+                    
                     failedUrlsState.value = failedUrlsState.value + videoUrl
                     val untriedStreams = streams.filter { it.url !in failedUrlsState.value && !it.isBroken }
                     val nextStream = untriedStreams.firstOrNull() ?: streams.filter { it.url !in failedUrlsState.value }.firstOrNull()
                     
                     if (nextStream != null && onStreamSwapped != null) {
-                        android.util.Log.i("VideoPlayer", "Automatic failover: swapping from $videoUrl to alternative source: ${nextStream.subName} (${nextStream.url})")
+                        android.util.Log.i("VideoPlayer", "Automatic failover (M3U8 Backup Switch): swapping from $videoUrl to secondary/backup source: ${nextStream.subName} (${nextStream.url})")
+                        consecutiveHttpErrors = 0
+                        retryCount = 0
                         onStreamSwapped.invoke(nextStream)
                     } else {
                         android.util.Log.e("VideoPlayer", "All alternative streams failed or no other sources available.")
                         hasError = true
                         onPlayerErrorOccurred?.invoke(error)
+                    }
+                } else {
+                    if (retryCount < 3) {
+                        val backoffDelay = when (retryCount) {
+                            0 -> 1000L
+                            1 -> 2000L
+                            else -> 4000L
+                        }
+                        android.util.Log.w("VideoPlayer", "Playback error (code=${error.errorCodeName}). Retrying in ${backoffDelay}ms (Attempt ${retryCount + 1}/3)...")
+                        retryCount++
+                        scope.launch {
+                            delay(backoffDelay)
+                            if (exoPlayer != null) {
+                                isBuffering = true
+                                exoPlayer.prepare()
+                                exoPlayer.play()
+                            }
+                        }
+                    } else {
+                        android.util.Log.e("VideoPlayer", "All 3 retries failed for current source: $videoUrl. Checking for other sources...")
+                        failedUrlsState.value = failedUrlsState.value + videoUrl
+                        val untriedStreams = streams.filter { it.url !in failedUrlsState.value && !it.isBroken }
+                        val nextStream = untriedStreams.firstOrNull() ?: streams.filter { it.url !in failedUrlsState.value }.firstOrNull()
+                        
+                        if (nextStream != null && onStreamSwapped != null) {
+                            android.util.Log.i("VideoPlayer", "Automatic failover: swapping from $videoUrl to alternative source: ${nextStream.subName} (${nextStream.url})")
+                            consecutiveHttpErrors = 0
+                            retryCount = 0
+                            onStreamSwapped.invoke(nextStream)
+                        } else {
+                            android.util.Log.e("VideoPlayer", "All alternative streams failed or no other sources available.")
+                            hasError = true
+                            onPlayerErrorOccurred?.invoke(error)
+                        }
                     }
                 }
             }
@@ -498,6 +551,43 @@ fun VideoPlayer(
     LaunchedEffect(exoPlayer, isMuted) {
         if (exoPlayer == null) return@LaunchedEffect
         exoPlayer.volume = if (isMuted) 0f else 1f
+    }
+
+    // Dynamic Playback Rate Smoothing & Zero-Buffering Adaptive Catch-up Engine
+    LaunchedEffect(exoPlayer, lowLatencyEnabled) {
+        if (exoPlayer == null) return@LaunchedEffect
+        while (isActive) {
+            val playbackState = exoPlayer.playbackState
+            if (playbackState == Player.STATE_READY && exoPlayer.playWhenReady) {
+                val bufferDurationMs = (exoPlayer.bufferedPosition - exoPlayer.currentPosition).coerceAtLeast(0L)
+                
+                val adjustedSpeed = when {
+                    // Buffer is critically low (< 2.5 seconds): slow down slightly to 0.82x to prevent hard rebuffering pauses
+                    bufferDurationMs < 2500L -> 0.82f
+                    
+                    // Buffer is moderately low (< 5.0 seconds): slow down to 0.90x to smoothly rebuild buffer
+                    bufferDurationMs < 5000L -> 0.90f
+                    
+                    // Buffer is extremely healthy (> 12.0 seconds) and in low-latency live mode:
+                    // Speed up to 1.05x to catch up to the live edge seamlessly if lagging
+                    lowLatencyEnabled && bufferDurationMs > 12000L && exoPlayer.currentLiveOffset > 3000L -> 1.05f
+                    
+                    // Normal playback speed
+                    else -> 1.00f
+                }
+                
+                if (kotlin.math.abs(exoPlayer.playbackParameters.speed - adjustedSpeed) > 0.01f) {
+                    exoPlayer.setPlaybackSpeed(adjustedSpeed)
+                    android.util.Log.d("BufferSensingEngine", "Buffer level: ${bufferDurationMs}ms. Dynamically adjusting playback speed to ${adjustedSpeed}x to prevent buffering.")
+                }
+            } else {
+                // Reset to standard speed if player is idle or buffering
+                if (kotlin.math.abs(exoPlayer.playbackParameters.speed - 1.0f) > 0.01f) {
+                    exoPlayer.setPlaybackSpeed(1.0f)
+                }
+            }
+            delay(800) // Highly-responsive polling loop
+        }
     }
 
     // Real-time diagnostics polling
@@ -664,16 +754,31 @@ fun VideoPlayer(
 private fun getMimeTypeForUrl(url: String): String? {
     val lowerUrl = url.lowercase()
     return when {
-        lowerUrl.contains(".m3u8") || lowerUrl.contains("/hls/") || lowerUrl.contains("/m3u8") -> MimeTypes.APPLICATION_M3U8
-        lowerUrl.contains(".mpd") || lowerUrl.contains("/dash/") || lowerUrl.contains("/mpd") -> MimeTypes.APPLICATION_MPD
+        lowerUrl.contains(".m3u8") || lowerUrl.contains("/hls/") || lowerUrl.contains("/m3u8") || lowerUrl.contains("type=hls") || lowerUrl.contains("format=m3u8") || lowerUrl.contains("format=hls") -> MimeTypes.APPLICATION_M3U8
+        lowerUrl.contains(".mpd") || lowerUrl.contains("/dash/") || lowerUrl.contains("/mpd") || lowerUrl.contains("type=dash") || lowerUrl.contains("format=dash") || lowerUrl.contains("format=mpd") -> MimeTypes.APPLICATION_MPD
         lowerUrl.contains(".ism") || lowerUrl.contains("/smooth/") || lowerUrl.contains("/manifest") -> MimeTypes.APPLICATION_SS
-        lowerUrl.contains(".ts") || lowerUrl.contains("/mpegts") || lowerUrl.contains("ext=ts") || lowerUrl.contains("/ts") -> "video/mp2t"
-        lowerUrl.contains(".mp4") -> MimeTypes.VIDEO_MP4
-        lowerUrl.contains(".mkv") -> "video/x-matroska"
-        lowerUrl.contains(".flv") -> "video/x-flv"
+        lowerUrl.contains(".ts") || lowerUrl.contains("/mpegts") || lowerUrl.contains("ext=ts") || lowerUrl.contains("/ts") || lowerUrl.contains("format=ts") -> "video/mp2t"
+        lowerUrl.contains(".mp4") || lowerUrl.contains("format=mp4") -> MimeTypes.VIDEO_MP4
+        lowerUrl.contains(".mkv") || lowerUrl.contains("format=mkv") -> "video/x-matroska"
+        lowerUrl.contains(".webm") || lowerUrl.contains("format=webm") -> "video/webm"
+        lowerUrl.contains(".flv") || lowerUrl.contains("format=flv") -> "video/x-flv"
+        lowerUrl.contains(".3gp") || lowerUrl.contains(".3g2") -> "video/3gpp"
         lowerUrl.startsWith("rtsp://") || lowerUrl.startsWith("rtsps://") -> MimeTypes.APPLICATION_RTSP
+        lowerUrl.startsWith("rtmp://") || lowerUrl.startsWith("rtmps://") -> "video/x-flv" // RTMP typically carries FLV
+        lowerUrl.contains(".mp3") -> "audio/mpeg"
+        lowerUrl.contains(".aac") -> "audio/aac"
+        lowerUrl.contains(".ogg") || lowerUrl.contains(".oga") -> "audio/ogg"
+        lowerUrl.contains(".wav") -> "audio/wav"
         else -> null
     }
+}
+
+private fun getHttpStatusCode(throwable: Throwable?): Int? {
+    if (throwable == null) return null
+    if (throwable is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException) {
+        return throwable.responseCode
+    }
+    return getHttpStatusCode(throwable.cause)
 }
 
 
@@ -711,29 +816,41 @@ class LiveTvDataSource(
     @Throws(java.io.IOException::class)
     override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long {
         val uriString = dataSpec.uri.toString().lowercase()
-        val isPlaylist = uriString.contains(".m3u8") || 
-                         uriString.contains(".mpd") || 
-                         uriString.contains(".ism") || 
-                         uriString.contains("/hls/") || 
-                         uriString.contains("/dash/") || 
-                         uriString.contains("/m3u8") ||
-                         uriString.contains("/smooth/") ||
-                         uriString.contains("/manifest") ||
-                         uriString.contains(".ts") ||
-                         uriString.contains("/ts") ||
-                         uriString.contains("ext=ts") ||
-                         uriString.contains(".m4s") ||
-                         uriString.contains("/m4s")
+        
+        // 1. Identify dynamic playlist manifests which require live updates from the upstream server
+        val isPlaylistManifest = uriString.contains(".m3u8") || 
+                                 uriString.contains(".mpd") || 
+                                 uriString.contains(".ism") || 
+                                 uriString.contains("/manifest")
+                                 
+        // 2. Identify media segments which are immutable and highly beneficial to cache locally
+        val isMediaSegment = uriString.contains(".ts") ||
+                             uriString.contains("/ts") ||
+                             uriString.contains("ext=ts") ||
+                             uriString.contains(".m4s") ||
+                             uriString.contains("/m4s") ||
+                             uriString.contains(".mp4") ||
+                             uriString.contains(".mkv") ||
+                             uriString.contains(".webm")
 
         val isLengthUnset = dataSpec.length == -1L
 
-        // Bypass cache for playlists, segment files, or any streams of unknown/unset length (live streams)
-        activeDataSource = if (isPlaylist || isLengthUnset) {
+        // 3. Enterprise Caching Split-Routing Strategy:
+        // - Always load playlist manifests from upstream to prevent stale index loops.
+        // - Always route media segments through cacheDataSource to store them locally on-the-fly and fetch them instantly.
+        // - For other file formats, use cacheDataSource if size is known, or default upstream.
+        activeDataSource = if (isPlaylistManifest) {
             upstreamDataSource
-        } else {
+        } else if (isMediaSegment) {
             cacheDataSource
+        } else {
+            if (isLengthUnset) upstreamDataSource else cacheDataSource
         }
-        android.util.Log.d("LiveTvDataSource", "Opening URI: ${dataSpec.uri}, isPlaylist: $isPlaylist, length: ${dataSpec.length}, isLengthUnset: $isLengthUnset, choosing: ${if (isPlaylist || isLengthUnset) "Upstream" else "Cache"}")
+        
+        android.util.Log.d(
+            "LiveTvDataSource", 
+            "Opening URI: ${dataSpec.uri}, isManifest: $isPlaylistManifest, isSegment: $isMediaSegment, length: ${dataSpec.length}, using: ${if (activeDataSource === upstreamDataSource) "Upstream" else "Local Cache"}"
+        )
         return activeDataSource.open(dataSpec)
     }
 

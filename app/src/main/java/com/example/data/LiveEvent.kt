@@ -174,7 +174,8 @@ object LiveEventParser {
         val words: Set<String>,
         val simplified: String,
         val isSportOrLiveEvent: Boolean,
-        val representsMatch: Boolean
+        val representsMatch: Boolean,
+        val isExplicitLiveEventGroup: Boolean
     )
 
     private var lastFetchedEvents: List<GroupedEvent>? = null
@@ -229,11 +230,20 @@ object LiveEventParser {
             val categoryLower = channel.category.lowercase()
             val nameLower = channelName.lowercase()
             
+            val isExplicitLiveEventGroup = categoryLower == "live events" ||
+                    categoryLower == "live event" ||
+                    categoryLower == "liveevents" ||
+                    categoryLower == "live_events" ||
+                    categoryLower == "live-events" ||
+                    categoryLower.contains("live event") ||
+                    categoryLower.contains("live events")
+
             val isSportOrLiveEvent = categoryLower.contains("sports") || 
                     categoryLower.contains("live") || 
                     categoryLower.contains("event") ||
                     nameLower.contains("sports") ||
-                    nameLower.contains("live")
+                    nameLower.contains("live") ||
+                    isExplicitLiveEventGroup
             
             val representsMatch = nameLower.contains(" vs ") || 
                     nameLower.contains(" v ") || 
@@ -248,7 +258,8 @@ object LiveEventParser {
                 words = words,
                 simplified = simplified,
                 isSportOrLiveEvent = isSportOrLiveEvent,
-                representsMatch = representsMatch
+                representsMatch = representsMatch,
+                isExplicitLiveEventGroup = isExplicitLiveEventGroup
             )
         }
         
@@ -295,7 +306,8 @@ object LiveEventParser {
             
             // If not matched to an existing event, auto-detect standalone sports events from the database
             if (!matched) {
-                if (info.isSportOrLiveEvent && info.representsMatch) {
+                val shouldAutoDetect = (info.isSportOrLiveEvent && info.representsMatch) || info.isExplicitLiveEventGroup
+                if (shouldAutoDetect) {
                     var sportCategory = "Live Sport"
                     val categoryLower = info.categoryLower
                     val nameLower = info.nameLower
@@ -307,6 +319,18 @@ object LiveEventParser {
                         sportCategory = "Tennis"
                     } else if (categoryLower.contains("racing") || nameLower.contains("f1") || nameLower.contains("race")) {
                         sportCategory = "Racing"
+                    } else if (categoryLower.contains("cricket") || nameLower.contains("cricket")) {
+                        sportCategory = "Cricket"
+                    } else if (categoryLower.contains("golf") || nameLower.contains("golf")) {
+                        sportCategory = "Golf"
+                    } else if (categoryLower.contains("ufc") || categoryLower.contains("wwe") || categoryLower.contains("mma") || categoryLower.contains("wrestl") || nameLower.contains("ufc") || nameLower.contains("wwe") || nameLower.contains("mma") || nameLower.contains("wrestl")) {
+                        sportCategory = "Wrestling/MMA"
+                    } else {
+                        sportCategory = if (channel.category.isNotBlank() && !channel.category.equals("Live Events", ignoreCase = true) && !channel.category.equals("Live Event", ignoreCase = true)) {
+                            channel.category
+                        } else {
+                            "Live Event"
+                        }
                     }
                     
                     val cleanTitle = channelName.replace(BRACKETS_REGEX, "").trim()
@@ -337,7 +361,25 @@ object LiveEventParser {
             }
         }
         
-        val result = mergedList.sortedBy { it.sportCategory }
+        val result = mergedList.sortedWith { e1, e2 ->
+            val cat1 = e1.sportCategory.lowercase()
+            val cat2 = e2.sportCategory.lowercase()
+            val score1 = when {
+                cat1.contains("football") || cat1.contains("soccer") -> 100
+                cat1.contains("cricket") -> 90
+                else -> 0
+            }
+            val score2 = when {
+                cat2.contains("football") || cat2.contains("soccer") -> 100
+                cat2.contains("cricket") -> 90
+                else -> 0
+            }
+            if (score1 != score2) {
+                score2.compareTo(score1) // descending (highest first)
+            } else {
+                e1.sportCategory.compareTo(e2.sportCategory, ignoreCase = true)
+            }
+        }
         synchronized(this) {
             lastFetchedEvents = fetchedEvents
             lastChannelsList = channels

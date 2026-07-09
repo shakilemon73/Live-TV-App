@@ -9,6 +9,9 @@ interface LiveTvDao {
     @Query("SELECT * FROM categories ORDER BY name ASC")
     fun getAllCategories(): Flow<List<CategoryEntity>>
 
+    @Query("SELECT * FROM categories ORDER BY name ASC")
+    suspend fun getAllCategoriesList(): List<CategoryEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCategory(category: CategoryEntity): Long
 
@@ -24,6 +27,9 @@ interface LiveTvDao {
     // --- Channels ---
     @Query("SELECT * FROM channels ORDER BY name ASC")
     fun getAllChannels(): Flow<List<ChannelEntity>>
+
+    @Query("SELECT * FROM channels ORDER BY name ASC")
+    suspend fun getAllChannelsList(): List<ChannelEntity>
 
     @Query("SELECT * FROM channels WHERE isBroken = 0 ORDER BY name ASC")
     fun getActiveChannels(): Flow<List<ChannelEntity>>
@@ -165,4 +171,29 @@ interface LiveTvDao {
 
     @Query("UPDATE interested_events SET isNotified = :isNotified WHERE id = :id")
     suspend fun updateInterestedEventNotified(id: String, isNotified: Boolean)
+
+    // --- EPG Programs ---
+    @Query("SELECT * FROM epg_programs WHERE endTime > :now")
+    fun getActiveEpgProgramsFlow(now: Long): Flow<List<EpgProgramEntity>>
+
+    @Query("SELECT * FROM epg_programs WHERE channelId IN (:channelIds) AND endTime > :now ORDER BY startTime ASC")
+    fun getEpgProgramsForChannelFlow(channelIds: List<String>, now: Long): Flow<List<EpgProgramEntity>>
+
+    @Query("SELECT * FROM epg_programs WHERE channelId IN (:channelIds) AND endTime > :now ORDER BY startTime ASC")
+    suspend fun getEpgProgramsForChannel(channelIds: List<String>, now: Long): List<EpgProgramEntity>
+
+    @Query("SELECT * FROM epg_programs WHERE channelId IN (:channelIds) AND startTime <= :now AND endTime >= :now LIMIT 1")
+    fun getCurrentProgramForChannelFlow(channelIds: List<String>, now: Long): Flow<EpgProgramEntity?>
+
+    @Query("SELECT * FROM epg_programs WHERE channelId IN (:channelIds) AND startTime <= :now AND endTime >= :now LIMIT 1")
+    suspend fun getCurrentProgramForChannel(channelIds: List<String>, now: Long): EpgProgramEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertEpgPrograms(programs: List<EpgProgramEntity>)
+
+    @Query("DELETE FROM epg_programs WHERE endTime < :cutoff")
+    suspend fun deleteOldEpgPrograms(cutoff: Long)
+
+    @Query("DELETE FROM epg_programs")
+    suspend fun clearAllEpgPrograms()
 }

@@ -4,6 +4,7 @@ import android.util.Log
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -40,6 +41,7 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             "Music" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/music.m3u",
             "Religious" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/religious.m3u",
             "Sports & Football" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/sports_football.m3u",
+            "Live Events" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/live-event.m3u",
             "Doms9 Base" to "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/base.m3u8",
             "Doms9 US TV" to "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8"
         )
@@ -106,6 +108,48 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
         dao.deleteCategory(category)
     }
 
+    // --- EPG Programs ---
+    suspend fun syncEpg(epgUrl: String) = withContext(Dispatchers.IO) {
+        try {
+            Log.d("LiveTvRepository", "Starting EPG Sync for URL: $epgUrl")
+            val xmltv = EpgParserService.fetchXmltvContent(context, epgUrl)
+            if (!xmltv.isNullOrBlank()) {
+                val programs = EpgParserService.parseXmltvText(xmltv)
+                if (programs.isNotEmpty()) {
+                    val cutoff = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+                    dao.deleteOldEpgPrograms(cutoff)
+                    dao.insertEpgPrograms(programs)
+                    Log.d("LiveTvRepository", "Successfully synced ${programs.size} EPG programs")
+                } else {
+                    Log.w("LiveTvRepository", "Parsed 0 programs from XML")
+                }
+            } else {
+                Log.w("LiveTvRepository", "Failed to fetch XMLTV EPG content")
+            }
+        } catch (e: Exception) {
+            Log.e("LiveTvRepository", "Error syncing EPG", e)
+        }
+    }
+
+    fun getActiveEpgProgramsFlow(now: Long): Flow<List<EpgProgramEntity>> {
+        return dao.getActiveEpgProgramsFlow(now)
+    }
+
+    fun getEpgProgramsForChannelFlow(tvgId: String, channelName: String): Flow<List<EpgProgramEntity>> {
+        val searchIds = listOf(tvgId, channelName).filter { it.isNotBlank() }
+        return dao.getEpgProgramsForChannelFlow(searchIds, System.currentTimeMillis())
+    }
+
+    fun getCurrentProgramForChannelFlow(tvgId: String, channelName: String): Flow<EpgProgramEntity?> {
+        val searchIds = listOf(tvgId, channelName).filter { it.isNotBlank() }
+        return dao.getCurrentProgramForChannelFlow(searchIds, System.currentTimeMillis())
+    }
+
+    suspend fun getCurrentProgramForChannel(tvgId: String, channelName: String): EpgProgramEntity? {
+        val searchIds = listOf(tvgId, channelName).filter { it.isNotBlank() }
+        return dao.getCurrentProgramForChannel(searchIds, System.currentTimeMillis())
+    }
+
     suspend fun insertChannel(channel: ChannelEntity): Long {
         val resolved = if (channel.category.isEmpty() && channel.categoryId != 0) {
             val cat = dao.getCategoryById(channel.categoryId)
@@ -153,6 +197,13 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             dao.deleteAllCategories()
 
             val parsedList = M3uParserService.parseM3uText(m3uText)
+            val extractedEpgUrl = M3uParserService.lastTvgUrl
+            if (extractedEpgUrl != null) {
+                M3uParserService.lastTvgUrl = null
+                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                    syncEpg(extractedEpgUrl)
+                }
+            }
             for (parsed in parsedList) {
                 if (channelsToInsert.size >= maxChannels) break
 
@@ -186,14 +237,14 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             if (channelsToInsert.isNotEmpty()) {
                 dao.insertChannels(channelsToInsert)
             } else {
-                val categories = dao.getAllCategories().first()
+                val categories = dao.getAllCategoriesList()
                 if (categories.isEmpty()) {
                     seedFallbackData()
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            val categories = dao.getAllCategories().first()
+            val categories = dao.getAllCategoriesList()
             if (categories.isEmpty()) {
                 seedFallbackData()
             }
@@ -201,7 +252,7 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
     }
 
     suspend fun seedDatabaseIfEmpty() {
-        val channels = dao.getAllChannels().first()
+        val channels = dao.getAllChannelsList()
         if (channels.isEmpty()) {
             seedFallbackData()
         }
@@ -219,13 +270,13 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
         val db = AppDatabase.getDatabase(context)
         db.withTransaction {
             // Get all current categories to look up their names
-            val categoryMap = dao.getAllCategories().first().associate { it.id to it.name }
+            val categoryMap = dao.getAllCategoriesList().associate { it.id to it.name }
 
             // Group parsed channels by their normalized name
             val parsedGrouped = parsedChannels.groupBy { ChannelNameNormalizer.sanitizeChannelName(it.name).lowercase() }
 
             // Get all current channels in the database
-            val existingChannels = dao.getAllChannels().first()
+            val existingChannels = dao.getAllChannelsList()
 
             // Map existing channels by normalized base name
             val existingByNormalizedName = existingChannels.associateBy { ChannelNameNormalizer.sanitizeChannelName(it.name).lowercase() }
@@ -364,9 +415,9 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             }
 
             // Clean up any empty categories
-            val remainingChannels = dao.getAllChannels().first()
+            val remainingChannels = dao.getAllChannelsList()
             val activeCategoryIds = remainingChannels.map { it.categoryId }.toSet()
-            val allCategories = dao.getAllCategories().first()
+            val allCategories = dao.getAllCategoriesList()
             val emptyCategories = allCategories.filter { it.id !in activeCategoryIds }
             if (emptyCategories.isNotEmpty()) {
                 emptyCategories.forEach { cat ->
@@ -460,10 +511,10 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
 
         var anyModified = false
         try {
-            val existingCategories = dao.getAllCategories().first()
+            val existingCategories = dao.getAllCategoriesList()
             val tempCategories = existingCategories.associate { it.name to it.id }.toMutableMap()
 
-            val existingChannels = dao.getAllChannels().first()
+            val existingChannels = dao.getAllChannelsList()
             val forceSync = force || existingChannels.isEmpty()
             val parsedStreamUrlsInSession = mutableSetOf<String>()
 
@@ -536,7 +587,7 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                 return@withContext true
             } else {
                 // Last resort fallback only if download succeeded but returned absolutely nothing
-                val categories = dao.getAllCategories().first()
+                val categories = dao.getAllCategoriesList()
                 if (categories.isEmpty()) {
                     seedFallbackData()
                     return@withContext true
@@ -544,7 +595,7 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            val categories = dao.getAllCategories().first()
+            val categories = dao.getAllCategoriesList()
             if (categories.isEmpty()) {
                 seedFallbackData()
                 return@withContext true
@@ -651,6 +702,13 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                 val body = response.body ?: return@use false
                 val parsedList = body.charStream().use { reader ->
                     M3uParserService.parseM3uReader(reader)
+                }
+                val extractedEpgUrl = M3uParserService.lastTvgUrl
+                if (extractedEpgUrl != null) {
+                    M3uParserService.lastTvgUrl = null
+                    kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                        syncEpg(extractedEpgUrl)
+                    }
                 }
 
                 val nestedUrls = mutableListOf<String>()
@@ -771,7 +829,7 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
     }
 
     private suspend fun seedFallbackData() {
-        val categories = dao.getAllCategories().first()
+        val categories = dao.getAllCategoriesList()
         if (categories.isEmpty()) {
             val newsId = dao.insertCategory(CategoryEntity(name = "International News")).toInt()
             val sportsId = dao.insertCategory(CategoryEntity(name = "Sports & Football")).toInt()
@@ -1004,94 +1062,6 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
     }
 
     private fun detectCategory(channelName: String, parsedGroup: String): String {
-        val group = parsedGroup.trim()
-        val normalizedGroup = group.lowercase()
-        val nameLower = channelName.lowercase()
-        
-        // 1. Priority Live Event detection
-        if (normalizedGroup.contains("live event") || normalizedGroup.contains("live_event") ||
-            nameLower.contains("live event") || nameLower.contains("live_event") || nameLower.contains("liveevent")) {
-            return "Live Event"
-        }
-        
-        // 2. Map group or name keywords to clean categories
-        // Check News first so that "Sports News" or generic news goes to News
-        if (normalizedGroup.contains("news") || nameLower.contains("news") || 
-            nameLower.contains("cnn") || nameLower.contains("bbc") || nameLower.contains("al jazeera") || 
-            nameLower.contains("euronews") || nameLower.contains("france 24") || nameLower.contains("dw") || 
-            nameLower.contains("sky news") || nameLower.contains("bloomberg") || nameLower.contains("reuters") ||
-            nameLower.contains("cna") || nameLower.contains("msnbc") || nameLower.contains("fox news") ||
-            nameLower.contains("press tv") || nameLower.contains("rt") || nameLower.contains("journal") ||
-            nameLower.contains("tv7") || nameLower.contains("actu") || nameLower.contains("presse")) {
-            return "News"
-        }
-        
-        if (normalizedGroup.contains("sport") || normalizedGroup.contains("football") || normalizedGroup.contains("soccer") ||
-            nameLower.contains("sport") || nameLower.contains("football") || nameLower.contains("soccer") || 
-            nameLower.contains("espn") || nameLower.contains("ufc") || nameLower.contains("fight") || 
-            nameLower.contains("racing") || nameLower.contains("f1") || nameLower.contains("golf") || 
-            nameLower.contains("tennis") || nameLower.contains("basketball") || nameLower.contains("nba") || 
-            nameLower.contains("cricket") || nameLower.contains("wwe") || nameLower.contains("billiard") ||
-            nameLower.contains("extreme") || nameLower.contains("athletics") || nameLower.contains("velo") ||
-            nameLower.contains("moto") || nameLower.contains("formula") || nameLower.contains("poker")) {
-            return "Sports"
-        }
-        
-        if (normalizedGroup.contains("kid") || normalizedGroup.contains("cartoon") || normalizedGroup.contains("animation") ||
-            nameLower.contains("kids") || nameLower.contains("cartoon") || nameLower.contains("disney") || 
-            nameLower.contains("nickelodeon") || nameLower.contains("anime") || nameLower.contains("baby") || 
-            nameLower.contains("toongoggles") || nameLower.contains("boomer") || nameLower.contains("cocomelon") ||
-            nameLower.contains("junior") || nameLower.contains("nick") || nameLower.contains("lullaby") ||
-            nameLower.contains("child")) {
-            return "Kids & Animation"
-        }
-        
-        if (normalizedGroup.contains("music") || normalizedGroup.contains("song") || normalizedGroup.contains("radio") ||
-            nameLower.contains("music") || nameLower.contains("mtv") || nameLower.contains("vocal") || 
-            nameLower.contains("sing") || nameLower.contains("classic fm") || nameLower.contains("rock") || 
-            nameLower.contains("pop") || nameLower.contains("jazz") || nameLower.contains("dance") || 
-            nameLower.contains("clubbing") || nameLower.contains("chanson") || nameLower.contains("melody") ||
-            nameLower.contains("hits") || nameLower.contains("muzik")) {
-            return "Music"
-        }
-        
-        if (normalizedGroup.contains("doc") || normalizedGroup.contains("science") || normalizedGroup.contains("space") || normalizedGroup.contains("nasa") ||
-            nameLower.contains("doc") || nameLower.contains("science") || nameLower.contains("space") || 
-            nameLower.contains("nasa") || nameLower.contains("nature") || nameLower.contains("history") || 
-            nameLower.contains("geo") || nameLower.contains("discovery") || nameLower.contains("wild") ||
-            nameLower.contains("earth") || nameLower.contains("national geographic") || nameLower.contains("nat geo") ||
-            nameLower.contains("animal") || nameLower.contains("museum") || nameLower.contains("archeo")) {
-            return "Science & Documentaries"
-        }
-        
-        if (normalizedGroup.contains("movie") || normalizedGroup.contains("film") || normalizedGroup.contains("cinema") || 
-            normalizedGroup.contains("entertainment") || normalizedGroup.contains("show") || normalizedGroup.contains("series") ||
-            normalizedGroup.contains("drama") || normalizedGroup.contains("comedy") ||
-            nameLower.contains("movie") || nameLower.contains("cinema") || nameLower.contains("entertainment") || 
-            nameLower.contains("action") || nameLower.contains("comedy") || nameLower.contains("drama") || 
-            nameLower.contains("series") || nameLower.contains("hbo") || nameLower.contains("show") || 
-            nameLower.contains("max") || nameLower.contains("cine") || nameLower.contains("film") ||
-            nameLower.contains("box") || nameLower.contains("fiction") || nameLower.contains("blockbuster")) {
-            return "Entertainment"
-        }
-        
-        if (normalizedGroup.contains("church") || normalizedGroup.contains("god") || normalizedGroup.contains("islam") || normalizedGroup.contains("religious") ||
-            nameLower.contains("church") || nameLower.contains("god") || nameLower.contains("bible") || 
-            nameLower.contains("islam") || nameLower.contains("christian") || nameLower.contains("gospel") || 
-            nameLower.contains("buddha") || nameLower.contains("quran") || nameLower.contains("pray") ||
-            nameLower.contains("faith") || nameLower.contains("prophetic") || nameLower.contains("makkah") ||
-            nameLower.contains("peace tv")) {
-            return "Religious"
-        }
-        
-        if (group.isNotEmpty() && normalizedGroup != "general" && normalizedGroup != "undefined" && 
-            normalizedGroup != "unsorted" && normalizedGroup != "other" && group.length > 3) {
-            // Capitalize words neatly
-            return group.split(' ').joinToString(" ") { word -> 
-                word.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() } 
-            }
-        }
-        
-        return "General"
+        return ChannelClassifier.classify(channelName, parsedGroup)
     }
 }

@@ -70,6 +70,7 @@ import android.media.AudioManager
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.CircleShape
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun PlayerScreen(
     viewModel: ChannelViewModel,
@@ -86,6 +87,8 @@ fun PlayerScreen(
     val selectedChannel by viewModel.selectedChannel.collectAsStateWithLifecycle()
     val currentStreamUrl by viewModel.currentStreamUrl.collectAsStateWithLifecycle()
     val currentStreamName by viewModel.currentStreamName.collectAsStateWithLifecycle()
+    val currentEpgProgram by viewModel.currentChannelEpgProgram.collectAsStateWithLifecycle()
+    val epgPrograms by viewModel.currentChannelEpgPrograms.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val allChannels by viewModel.filteredChannels.collectAsStateWithLifecycle()
     val lowLatencyEnabled by viewModel.lowLatencyMode.collectAsStateWithLifecycle()
@@ -720,6 +723,20 @@ fun PlayerScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (currentEpgProgram != null) {
+                            val timeSdf = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+                            val startTimeStr = remember(currentEpgProgram) { timeSdf.format(java.util.Date(currentEpgProgram!!.startTime)) }
+                            val endTimeStr = remember(currentEpgProgram) { timeSdf.format(java.util.Date(currentEpgProgram!!.endTime)) }
+                            Text(
+                                text = "${currentEpgProgram!!.title} ($startTimeStr - $endTimeStr)",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = Color(0xFFD0BCFF),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(top = 4.dp)
@@ -1932,6 +1949,38 @@ fun PlayerScreen(
                                     valueColor = Color.White
                                 )
                                 
+                                // Buffer Capacity Row
+                                val bufferDurationSec = (diagnostics?.bufferDurationMs ?: 0L) / 1000f
+                                val bufferColor = when {
+                                    bufferDurationSec >= 8f -> Color(0xFF81C784) // green
+                                    bufferDurationSec >= 3f -> Color(0xFFFFD54F) // yellow
+                                    else -> Color(0xFFFF8A80) // red
+                                }
+                                DiagnosticItem(
+                                    label = "Buffer Capacity",
+                                    value = String.format("%.2fs", bufferDurationSec),
+                                    valueColor = bufferColor
+                                )
+
+                                // Dynamic Playback Speed Row
+                                val playbackSpeed = diagnostics?.playbackSpeed ?: 1.0f
+                                val speedValue = when {
+                                    playbackSpeed < 0.85f -> String.format("%.2fx (Buffer Shield Max)", playbackSpeed)
+                                    playbackSpeed < 0.98f -> String.format("%.2fx (Adaptive Protection)", playbackSpeed)
+                                    playbackSpeed > 1.02f -> String.format("%.2fx (Live Catch-up)", playbackSpeed)
+                                    else -> "1.00x (Stable Playback)"
+                                }
+                                val speedColor = when {
+                                    playbackSpeed < 0.98f -> Color(0xFF64B5F6) // blue
+                                    playbackSpeed > 1.02f -> Color(0xFFBA68C8) // purple
+                                    else -> Color.White
+                                }
+                                DiagnosticItem(
+                                    label = "Anti-Buffer Protection",
+                                    value = speedValue,
+                                    valueColor = speedColor
+                                )
+
                                 // TTFF Row
                                 val ttff = diagnostics?.timeToFirstFrameMs ?: 0L
                                 DiagnosticItem(
@@ -1955,6 +2004,70 @@ fun PlayerScreen(
                                     value = "${"%.1f".format(errorRate * 100)}%",
                                     valueColor = if (errorRate > 0.1f) Color(0xFFFF8A80) else Color.White
                                 )
+                            }
+                        }
+
+                        if (epgPrograms.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Text(
+                                text = "UPCOMING PROGRAMS",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD0BCFF),
+                                letterSpacing = 1.sp
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            androidx.compose.material3.Card(
+                                colors = androidx.compose.material3.CardDefaults.cardColors(
+                                    containerColor = Color.White.copy(alpha = 0.04f)
+                                ),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    val timeSdf = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+                                    epgPrograms.take(5).forEachIndexed { index, prog ->
+                                        val startStr = timeSdf.format(java.util.Date(prog.startTime))
+                                        val endStr = timeSdf.format(java.util.Date(prog.endTime))
+                                        Column {
+                                            Text(
+                                                text = prog.title,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                            Text(
+                                                text = "$startStr - $endStr",
+                                                fontSize = 11.sp,
+                                                color = Color.LightGray
+                                            )
+                                            if (prog.description.isNotBlank()) {
+                                                Text(
+                                                    text = prog.description,
+                                                    fontSize = 11.sp,
+                                                    color = Color.Gray,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.padding(top = 2.dp)
+                                                )
+                                            }
+                                        }
+                                        if (index < epgPrograms.take(5).size - 1) {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(0.5.dp)
+                                                    .background(Color.White.copy(alpha = 0.08f))
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

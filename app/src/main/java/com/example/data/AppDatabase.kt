@@ -8,7 +8,7 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [CategoryEntity::class, ChannelEntity::class, RecordingEntity::class, M3uMetaEntity::class, CachedLiveEventEntity::class, InterestedEventEntity::class], version = 12, exportSchema = false)
+@Database(entities = [CategoryEntity::class, ChannelEntity::class, RecordingEntity::class, M3uMetaEntity::class, CachedLiveEventEntity::class, InterestedEventEntity::class, EpgProgramEntity::class], version = 13, exportSchema = false)
 @TypeConverters(PlaybackSourceTypeConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun liveTvDao(): LiveTvDao

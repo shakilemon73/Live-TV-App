@@ -20,10 +20,158 @@ object CategoryNames {
     const val ANIMATION = "Animation"
     const val BUSINESS = "Business"
     const val AUTO = "Auto"
+    
+    // Remaining of the 19 Playlists
+    const val BDIX_IPTV = "BDIX IPTV"
+    const val DOMS9_BASE = "Doms9 Base"
+    const val DOMS9_US_TV = "Doms9 US TV"
+
+    // Dedicated channel categories
+    const val LIVE_SPORTS = "Live Sports Events"
+    const val SPORTS_NETWORKS = "Sports Networks"
+    const val PREMIUM_MOVIES = "Premium Movies & Drama"
+    const val CLASSIC_TV = "Classic & Retro TV"
+    const val CRIME_INVESTIGATION = "Crime & Investigation"
+    const val SCIENCE_HISTORY = "Science & History"
+    const val LIFESTYLE_CUISINE = "Lifestyle & Cuisine"
+    const val US_LOCALS = "US Local Networks"
+    const val KIDS_ANIMATION = "Kids & Animation"
 }
 
 object ChannelClassifier {
     private val normalizationRegex = """(?i)\b(HD|FHD|UHD|SD|4K|1080P|720P|576P|480P|360P|HEVC|H264|H265|RAW|STREAM|TV|HQ|USA?|UK|CA|IN|BD|ES|FR|DE|IT|JP|VIP|LIVE|ONLINE|M3U8)\b|[|:.\-_+\\/\[\]()]+""".toRegex()
+
+    // Highly precise dictionary mapping of all channels from the playlist
+    private val DIRECT_MAPPINGS = mapOf(
+        // US Local Networks
+        "ABC" to CategoryNames.US_LOCALS,
+        "CBS" to CategoryNames.US_LOCALS,
+        "NBC" to CategoryNames.US_LOCALS,
+        "Fox" to CategoryNames.US_LOCALS,
+        "CW" to CategoryNames.US_LOCALS,
+        "Telemundo" to CategoryNames.US_LOCALS,
+
+        // Premium Movies & Drama
+        "Cinemax" to CategoryNames.PREMIUM_MOVIES,
+        "HBO" to CategoryNames.PREMIUM_MOVIES,
+        "HBO 2" to CategoryNames.PREMIUM_MOVIES,
+        "HBO Comedy" to CategoryNames.PREMIUM_MOVIES,
+        "HBO Zone" to CategoryNames.PREMIUM_MOVIES,
+        "Starz" to CategoryNames.PREMIUM_MOVIES,
+        "Starz Encore Classic" to CategoryNames.PREMIUM_MOVIES,
+        "Showtime" to CategoryNames.PREMIUM_MOVIES,
+        "Showtime Extreme" to CategoryNames.PREMIUM_MOVIES,
+        "Lifetime Movie Network" to CategoryNames.PREMIUM_MOVIES,
+        "Sony Movie Channel" to CategoryNames.PREMIUM_MOVIES,
+        "Turner Classic Movies" to CategoryNames.PREMIUM_MOVIES,
+        "FX Movie Channel" to CategoryNames.PREMIUM_MOVIES,
+
+        // Sports Networks
+        "ACC Network" to CategoryNames.SPORTS_NETWORKS,
+        "Altitude Sports" to CategoryNames.SPORTS_NETWORKS,
+        "beIN Sports 1" to CategoryNames.SPORTS_NETWORKS,
+        "Big Ten Network" to CategoryNames.SPORTS_NETWORKS,
+        "CBS Sports Golazo Network" to CategoryNames.SPORTS_NETWORKS,
+        "CBS Sports Network" to CategoryNames.SPORTS_NETWORKS,
+        "DIRECTV Sports" to CategoryNames.SPORTS_NETWORKS,
+        "DIRECTV Sports +" to CategoryNames.SPORTS_NETWORKS,
+        "ESPN" to CategoryNames.SPORTS_NETWORKS,
+        "ESPN2" to CategoryNames.SPORTS_NETWORKS,
+        "ESPN News" to CategoryNames.SPORTS_NETWORKS,
+        "ESPN U" to CategoryNames.SPORTS_NETWORKS,
+        "Fox Sports 1" to CategoryNames.SPORTS_NETWORKS,
+        "Fox Sports 2" to CategoryNames.SPORTS_NETWORKS,
+        "Golf Channel" to CategoryNames.SPORTS_NETWORKS,
+        "Marquee Sports Network" to CategoryNames.SPORTS_NETWORKS,
+        "MLB Network" to CategoryNames.SPORTS_NETWORKS,
+        "NBA TV" to CategoryNames.SPORTS_NETWORKS,
+        "NBC Sports Bay Area" to CategoryNames.SPORTS_NETWORKS,
+        "NBC Sports Boston" to CategoryNames.SPORTS_NETWORKS,
+        "NBC Sports California" to CategoryNames.SPORTS_NETWORKS,
+        "NBC Sports NOW" to CategoryNames.SPORTS_NETWORKS,
+        "NBC Sports Philadelphia" to CategoryNames.SPORTS_NETWORKS,
+        "NESN" to CategoryNames.SPORTS_NETWORKS,
+        "NFL Network" to CategoryNames.SPORTS_NETWORKS,
+        "NHL Network" to CategoryNames.SPORTS_NETWORKS,
+        "Outdoor Channel" to CategoryNames.SPORTS_NETWORKS,
+        "Premier Sports 1" to CategoryNames.SPORTS_NETWORKS,
+        "Premier Sports 2" to CategoryNames.SPORTS_NETWORKS,
+        "SEC Network" to CategoryNames.SPORTS_NETWORKS,
+        "Sky Sports Football" to CategoryNames.SPORTS_NETWORKS,
+        "Sky Sports News" to CategoryNames.SPORTS_NETWORKS,
+        "Sky Sports Premier League" to CategoryNames.SPORTS_NETWORKS,
+        "Space City Home Network" to CategoryNames.SPORTS_NETWORKS,
+        "Spectrum SportsNet LA Dodgers" to CategoryNames.SPORTS_NETWORKS,
+        "Spectrum SportsNet Lakers" to CategoryNames.SPORTS_NETWORKS,
+        "Sportsnet 360" to CategoryNames.SPORTS_NETWORKS,
+        "Sportsnet East" to CategoryNames.SPORTS_NETWORKS,
+        "SportsNet New York" to CategoryNames.SPORTS_NETWORKS,
+        "Sportsnet One" to CategoryNames.SPORTS_NETWORKS,
+        "Tennis Channel" to CategoryNames.SPORTS_NETWORKS,
+        "TSN1" to CategoryNames.SPORTS_NETWORKS,
+        "TSN2" to CategoryNames.SPORTS_NETWORKS,
+        "Willow Cricket" to CategoryNames.SPORTS_NETWORKS,
+        "YES Network" to CategoryNames.SPORTS_NETWORKS,
+
+        // News
+        "BBC World News" to CategoryNames.NEWS,
+        "CBS News 24/7" to CategoryNames.NEWS,
+        "CNBC" to CategoryNames.NEWS,
+        "CNN" to CategoryNames.NEWS,
+        "Fox Business" to CategoryNames.NEWS,
+        "Fox News" to CategoryNames.NEWS,
+        "HLN TV" to CategoryNames.NEWS,
+        "MSNBC" to CategoryNames.NEWS,
+        "Newsmax TV" to CategoryNames.NEWS,
+        "NewsNation" to CategoryNames.NEWS,
+        "The Weather Channel" to CategoryNames.NEWS,
+
+        // Science & History
+        "Discovery Channel" to CategoryNames.SCIENCE_HISTORY,
+        "Discovery Science" to CategoryNames.SCIENCE_HISTORY,
+        "History Channel" to CategoryNames.SCIENCE_HISTORY,
+        "Smithsonian Channel" to CategoryNames.SCIENCE_HISTORY,
+        "Nat Geo" to CategoryNames.SCIENCE_HISTORY,
+        "Nat Geo Wild" to CategoryNames.SCIENCE_HISTORY,
+        "Animal Planet" to CategoryNames.SCIENCE_HISTORY,
+
+        // Kids & Animation
+        "Boomerang" to CategoryNames.KIDS_ANIMATION,
+        "Cartoon Network" to CategoryNames.KIDS_ANIMATION,
+        "Discovery Family Channel" to CategoryNames.KIDS_ANIMATION,
+        "Disney Channel" to CategoryNames.KIDS_ANIMATION,
+        "Disney Jr" to CategoryNames.KIDS_ANIMATION,
+        "Disney XD" to CategoryNames.KIDS_ANIMATION,
+        "Nickelodeon" to CategoryNames.KIDS_ANIMATION,
+        "Nick Jr" to CategoryNames.KIDS_ANIMATION,
+        "Nicktoons" to CategoryNames.KIDS_ANIMATION,
+        "PBS Kids" to CategoryNames.KIDS_ANIMATION,
+
+        // Crime & Investigation
+        "Crime & Investigation Network" to CategoryNames.CRIME_INVESTIGATION,
+        "Investigation Discovery" to CategoryNames.CRIME_INVESTIGATION,
+        "Oxygen" to CategoryNames.CRIME_INVESTIGATION,
+        "Court TV" to CategoryNames.CRIME_INVESTIGATION,
+        "Reelz Channel" to CategoryNames.CRIME_INVESTIGATION,
+
+        // Classic & Retro TV
+        "Buzzr" to CategoryNames.CLASSIC_TV,
+        "getTV" to CategoryNames.CLASSIC_TV,
+        "Grit TV" to CategoryNames.CLASSIC_TV,
+        "Comet TV" to CategoryNames.CLASSIC_TV,
+        "Cozi TV" to CategoryNames.CLASSIC_TV,
+        "Bounce TV" to CategoryNames.CLASSIC_TV,
+        "TV Land" to CategoryNames.CLASSIC_TV,
+        "INSP" to CategoryNames.CLASSIC_TV,
+
+        // Lifestyle & Cuisine
+        "Food Network" to CategoryNames.LIFESTYLE_CUISINE,
+        "Cooking Channel" to CategoryNames.LIFESTYLE_CUISINE,
+        "TLC" to CategoryNames.LIFESTYLE_CUISINE,
+        "MotorTrend TV" to CategoryNames.LIFESTYLE_CUISINE,
+        "Discovery Life" to CategoryNames.LIFESTYLE_CUISINE,
+        "FYI TV" to CategoryNames.LIFESTYLE_CUISINE
+    )
 
     // Stopwords carrying minimal semantic weight
     private val STOPWORDS = setOf(
@@ -170,6 +318,137 @@ object ChannelClassifier {
      * TF-IDF bigram profiles.
      */
     fun classify(channelName: String, groupTitle: String?, playlistSource: String? = null): String {
+        val cleanName = channelName.trim()
+        val lowerName = cleanName.lowercase()
+
+        // 1. Direct High-Precision Lookup Match first
+        val directMatch = DIRECT_MAPPINGS[cleanName]
+        if (directMatch != null) return directMatch
+
+        // Case-insensitive direct match fallback
+        val caseInsensitiveMatch = DIRECT_MAPPINGS.entries.firstOrNull { it.key.equals(cleanName, ignoreCase = true) }?.value
+        if (caseInsensitiveMatch != null) return caseInsensitiveMatch
+
+        // Explicit Live Events group check
+        val explicitGroupCheck = groupTitle?.lowercase()?.trim() ?: ""
+        if (explicitGroupCheck == "live events" || 
+            explicitGroupCheck == "live event" || 
+            explicitGroupCheck == "liveevents" || 
+            explicitGroupCheck == "live_events" || 
+            explicitGroupCheck == "live-events" || 
+            explicitGroupCheck.contains("live event") || 
+            explicitGroupCheck.contains("live events")
+        ) {
+            return "Live Events"
+        }
+
+        // 2. High-Precision Pattern Matching for Live Sports Events (highly prevalent in dynamic TV.m3u8)
+        if (cleanName.startsWith("[") || 
+            lowerName.contains(" vs ") || 
+            lowerName.contains(" at ") || 
+            lowerName.contains("world cup") || 
+            lowerName.contains("copa del mundo") || 
+            lowerName.contains("fifa") || 
+            lowerName.contains("fútbol") || 
+            lowerName.contains("basketball") || 
+            lowerName.contains("strmcntr") || 
+            lowerName.contains("strmxhd") || 
+            lowerName.contains("xyzstrm") || 
+            lowerName.contains("strmhub") || 
+            lowerName.contains("strmsgate") || 
+            lowerName.contains("watchfty") || 
+            lowerName.contains("fawa") ||
+            lowerName.contains("fighting") ||
+            lowerName.contains("ufc") ||
+            lowerName.contains("wwe")
+        ) {
+            return CategoryNames.LIVE_SPORTS
+        }
+
+        // 3. Fallback Keyphrase Matching for Custom/Playlist-Aligned Categories
+        when {
+            // Cricket
+            lowerName.contains("cricket") || lowerName.contains("willow") || lowerName.contains("ipl 2") || lowerName.contains("t20") || lowerName.contains("bpl") || lowerName.contains("ten cricket") -> {
+                return CategoryNames.CRICKET
+            }
+
+            // Bangla News
+            lowerName.contains("somoy") || lowerName.contains("jamuna") || lowerName.contains("ekattor") || lowerName.contains("dbc news") || lowerName.contains("news 24 hd") || lowerName.contains("news24 hd") || lowerName.contains("bangla news") || lowerName.contains("bd news") || lowerName.contains("abp ananda") || lowerName.contains("calcutta news") || lowerName.contains("kolkata tv") || lowerName.contains("news18 bangla") || lowerName.contains("r bangla") || lowerName.contains("zee 24 ghanta") || lowerName.contains("ekhon tv") || lowerName.contains("r plus news") -> {
+                return CategoryNames.BANGLA_NEWS
+            }
+
+            // Bangla Channel
+            lowerName.contains("bangla") || lowerName.contains("bengali") || lowerName.contains("bdix") || lowerName.contains("dhaka") || lowerName.contains("ntv") || lowerName.contains("gtv") || lowerName.contains("atn") || lowerName.contains("gazi") || lowerName.contains("maasranga") || lowerName.contains("massranga") || lowerName.contains("nagorik") || lowerName.contains("rtv") || lowerName.contains("sa tv") || lowerName.contains("satv") || lowerName.contains("sangsad") || lowerName.contains("bongo drama") || lowerName.contains("toffee drama") || lowerName.contains("mohona tv") || lowerName.contains("asian tv") || lowerName.contains("bijoy") || lowerName.contains("ananda tv") || lowerName.contains("channel s") || lowerName.contains("falconcast") || lowerName.contains("green tv") || lowerName.contains("tv9 bangla") || lowerName.contains("independent tv") || lowerName.contains("channel 24") || lowerName.contains("channel 9") || lowerName.contains("channel i") || lowerName.contains("deepto") || lowerName.contains("dipto") || lowerName.contains("dippto") || lowerName.contains("ekushey") || lowerName.contains("g series") || lowerName.contains("g-serise") || lowerName.contains("uniques hd") || lowerName.contains("goldmines") -> {
+                return CategoryNames.BANGLA_CHANNEL
+            }
+
+            // Kids & Animation (Broad Match default to Kids)
+            lowerName.contains("disney") || lowerName.contains("nick") || lowerName.contains("cartoon") || lowerName.contains("boomerang") || lowerName.contains("kids") || lowerName.contains("baby") || lowerName.contains("toon") || lowerName.contains("cbeebies") || lowerName.contains("buddystar") || lowerName.contains("duronto") || lowerName.contains("funny junior") || lowerName.contains("jungle book") || lowerName.contains("nikki") || lowerName.contains("nikky") || lowerName.contains("pbs kids") || lowerName.contains("rongeen tv") || lowerName.contains("smarty") || lowerName.contains("tom & jerry") || lowerName.contains("tom & jarry") || lowerName.contains("zoo moo") || lowerName.contains("pogo") -> {
+                return CategoryNames.KIDS
+            }
+
+            // Animation
+            lowerName.contains("animation") || lowerName.contains("anime") || lowerName.contains("animax") -> {
+                return CategoryNames.ANIMATION
+            }
+
+            // Auto
+            lowerName.contains("auto") || lowerName.contains("car") || lowerName.contains("motor") || lowerName.contains("garage") || lowerName.contains("racing") || lowerName.contains("formula 1") || lowerName.contains("f1") || lowerName.contains("nascar") || lowerName.contains("motogp") -> {
+                return CategoryNames.AUTO
+            }
+
+            // Business
+            lowerName.contains("business") || lowerName.contains("finance") || lowerName.contains("stock") || lowerName.contains("investment pitch") || lowerName.contains("market watch") -> {
+                return CategoryNames.BUSINESS
+            }
+
+            // Comedy
+            lowerName.contains("comedy") || lowerName.contains("humor") || lowerName.contains("laughter") || lowerName.contains("ridiculous tv") || lowerName.contains("el búnquer") || lowerName.contains("13 humor") -> {
+                return CategoryNames.COMEDY
+            }
+
+            // Documentary
+            lowerName.contains("discovery") || lowerName.contains("science") || lowerName.contains("history") || lowerName.contains("geo") || lowerName.contains("smithsonian") || lowerName.contains("planet") || lowerName.contains("geographic") || lowerName.contains("nasa") || lowerName.contains("nat geo") || lowerName.contains("animal planet") || lowerName.contains("bbc earth") || lowerName.contains("wild earth") || lowerName.contains("wild life") || lowerName.contains("wild nature") || lowerName.contains("real wild") || lowerName.contains("docment") -> {
+                return CategoryNames.DOCUMENTARY
+            }
+
+            // Entertainment
+            lowerName.contains("entertainment") || lowerName.contains("entretención") || lowerName.contains("realities") || lowerName.contains("13th street") || lowerName.contains("13 ulica") || lowerName.contains("1kzn") || lowerName.contains("mediaset") || lowerName.contains("9gem") || lowerName.contains("9go") || lowerName.contains("e! ") || lowerName.contains("live channel") || lowerName.contains("showtime") -> {
+                return CategoryNames.ENTERTAINMENT
+            }
+
+            // International News
+            lowerName.contains("news") || lowerName.contains("msnbc") || lowerName.contains("cnn") || lowerName.contains("cnbc") || lowerName.contains("bloomberg") || lowerName.contains("weather") || lowerName.contains("breaking") || lowerName.contains("dw") || lowerName.contains("euronews") || lowerName.contains("al jazeera") || lowerName.contains("aljazeera") || lowerName.contains("cgtn") || lowerName.contains("cna") || lowerName.contains("france 24") || lowerName.contains("france news") || lowerName.contains("india today") || lowerName.contains("iran international") || lowerName.contains("ndtv") || lowerName.contains("nhk world") || lowerName.contains("press tv") || lowerName.contains("rt news") || lowerName.contains("rt now") || lowerName.contains("sky news") || lowerName.contains("trt world") || lowerName.contains("times of india") || lowerName.contains("wion") || lowerName.contains("c-span") || lowerName.contains("newsnation") -> {
+                return CategoryNames.NEWS
+            }
+
+            // Lifestyle
+            lowerName.contains("lifestyle") || lowerName.contains("travel") || lowerName.contains("garden") || lowerName.contains("hgtv") || lowerName.contains("tlc") || lowerName.contains("cuisine") || lowerName.contains("fashion") || lowerName.contains("kitchen") || lowerName.contains("luxe life") || lowerName.contains("motortrend") || lowerName.contains("discovery life") || lowerName.contains("fyi tv") || lowerName.contains("digital fashion") || lowerName.contains("hum masala") -> {
+                return CategoryNames.LIFESTYLE
+            }
+
+            // Movies
+            lowerName.contains("movie") || lowerName.contains("cinema") || lowerName.contains("film") || lowerName.contains("hallmark") || lowerName.contains("lifetime") || lowerName.contains("sony max") || lowerName.contains("sony pix") || lowerName.contains("b4u movie") || lowerName.contains("star gold") || lowerName.contains("goldmines") || lowerName.contains("sheemaroo") || lowerName.contains("superrix") || lowerName.contains("zb cinema") || lowerName.contains("zee cinema") || lowerName.contains("zee action") || lowerName.contains("amc") || lowerName.contains("fxx") || lowerName.contains("fx movie") || lowerName.contains("multiplex") || lowerName.contains("cineedge") || lowerName.contains("cinelife") || lowerName.contains("cinepride") || lowerName.contains("frightflix") || lowerName.contains("screem") || lowerName.contains("watch it scream") || lowerName.contains("tnt") || lowerName.contains("tnt4") || lowerName.contains("tnt international") || lowerName.contains("hbo") || lowerName.contains("cinemax") || lowerName.contains("starz") -> {
+                return CategoryNames.MOVIES
+            }
+
+            // Music
+            lowerName.contains("music") || lowerName.contains("song") || lowerName.contains("mtv") || lowerName.contains("vh1") || lowerName.contains("b4u music") || lowerName.contains("hindi hits") || lowerName.contains("yrf music") || lowerName.contains("gaan bangla") || lowerName.contains("dhoom music") || lowerName.contains("music india") || lowerName.contains("music mastii") || lowerName.contains("party universe") || lowerName.contains("radio") || lowerName.contains("radiovisione") || lowerName.contains("9x tashan") || lowerName.contains("9x jhakaas") || lowerName.contains("9x jalwa") || lowerName.contains("9xm") || lowerName.contains("8xm") || lowerName.contains("bengla beats") -> {
+                return CategoryNames.MUSIC
+            }
+
+            // Religious
+            lowerName.contains("religious") || lowerName.contains("islam") || lowerName.contains("bible") || lowerName.contains("prayer") || lowerName.contains("gospel") || lowerName.contains("quran") || lowerName.contains("sunnah") || lowerName.contains("madani") || lowerName.contains("peace tv") || lowerName.contains("peace tv bangla") || lowerName.contains("ewtn") || lowerName.contains("god tv") || lowerName.contains("makkah") || lowerName.contains("madina") || lowerName.contains("noor tv") || lowerName.contains("sunnah tv") || lowerName.contains("3abn") || lowerName.contains("al sunnah") || lowerName.contains("al quran") || lowerName.contains("al_quran") || lowerName.contains("kareem tv") -> {
+                return CategoryNames.RELIGIOUS
+            }
+
+            // Sports & Football
+            lowerName.contains("sports") || lowerName.contains("sport") || lowerName.contains("football") || lowerName.contains("soccer") || lowerName.contains("golf") || lowerName.contains("tennis") || lowerName.contains("nba") || lowerName.contains("nfl") || lowerName.contains("nhl") || lowerName.contains("mlb") || lowerName.contains("premier league") || lowerName.contains("bein") || lowerName.contains("ten") || lowerName.contains("sportsnet") || lowerName.contains("sec network") || lowerName.contains("acc network") || lowerName.contains("ptv sport") || lowerName.contains("t sports") || lowerName.contains("a sports") || lowerName.contains("eurosports") || lowerName.contains("sony sports") || lowerName.contains("sony ten") || lowerName.contains("sky sports") || lowerName.contains("nbc sports") || lowerName.contains("cbs sports") || lowerName.contains("dazn") || lowerName.contains("skynet sports") || lowerName.contains("unite 8 sports") || lowerName.contains("win sports") || lowerName.contains("tudn sports") || lowerName.contains("dd sports") || lowerName.contains("tvp sports") || lowerName.contains("tvri sport") -> {
+                return CategoryNames.SPORTS
+            }
+        }
+
+        // 4. Fallback to existing vector/Cosine-similarity checks for any dynamic or broad sources
         val cleanGroup = groupTitle?.lowercase()?.trim() ?: ""
         val cleanSource = playlistSource?.trim() ?: ""
 
@@ -209,25 +488,22 @@ object ChannelClassifier {
         val maxConfidence = topEntry?.value ?: 0.0
 
         // Resolve decision mapping
-        if (!isBroadSource) {
-            val sourceCategory = mapSourceToCategory(cleanSource)
+        val sourceCategory = mapSourceToCategory(cleanSource)
+        val hasValidSource = cleanSource.isNotBlank() && 
+                             !cleanSource.equals("default", ignoreCase = true) && 
+                             !cleanSource.equals("all", ignoreCase = true)
 
-            // Contradiction proofing: override source category only under high statistical confidence
-            if (detectedCategory != null && detectedCategory != sourceCategory && maxConfidence >= 0.65) {
-                return detectedCategory
-            }
-
-            // High default to curated repository classifications
-            return sourceCategory
-        }
-
-        // For broad sources, project the highest matching semantic score
+        // For any channel across all 19 playlists, if we detected a dedicated premium category, use it
         if (detectedCategory != null && maxConfidence >= 0.15) {
             return detectedCategory
         }
 
         if (groupPrior != null) {
             return groupPrior
+        }
+
+        if (hasValidSource) {
+            return sourceCategory
         }
 
         // Special default fallback checks
@@ -332,6 +608,7 @@ object ChannelClassifier {
 
     private fun mapSourceToCategory(source: String): String {
         return when {
+            source.equals("BDIX IPTV", ignoreCase = true) -> CategoryNames.BDIX_IPTV
             source.equals("Animation", ignoreCase = true) -> CategoryNames.ANIMATION
             source.equals("Auto", ignoreCase = true) -> CategoryNames.AUTO
             source.equals("Bangla Channel", ignoreCase = true) -> CategoryNames.BANGLA_CHANNEL
@@ -348,7 +625,90 @@ object ChannelClassifier {
             source.equals("Music", ignoreCase = true) -> CategoryNames.MUSIC
             source.equals("Religious", ignoreCase = true) -> CategoryNames.RELIGIOUS
             source.equals("Sports & Football", ignoreCase = true) -> CategoryNames.SPORTS
+            source.equals("Doms9 Base", ignoreCase = true) -> CategoryNames.DOMS9_BASE
+            source.equals("Doms9 US TV", ignoreCase = true) -> CategoryNames.DOMS9_US_TV
             else -> source
+        }
+    }
+
+    fun getChannelReputationScore(name: String): Int {
+        val lower = name.lowercase()
+        return when {
+            // News
+            lower.contains("bbc world") || lower.contains("bbc news") -> 100
+            lower.contains("cnn") -> 100
+            lower.contains("msnbc") -> 95
+            lower.contains("al jazeera") || lower.contains("aljazeera") -> 95
+            lower.contains("sky news") -> 90
+            lower.contains("fox news") -> 90
+            lower.contains("cnbc") -> 85
+            lower.contains("bloomberg") -> 85
+            lower.contains("dw ") || lower.endsWith("dw") || lower.contains("deutsche welle") -> 80
+            lower.contains("france 24") -> 80
+
+            // Sports & Cricket
+            lower.contains("espn") -> 100
+            lower.contains("sky sports") -> 100
+            lower.contains("willow") -> 95
+            lower.contains("bein sports") || lower.contains("beinsports") -> 95
+            lower.contains("dazn") -> 90
+            lower.contains("t sports") || lower.contains("tsports") -> 90
+            lower.contains("ptv sport") -> 85
+            lower.contains("sony sports") || lower.contains("sony ten") -> 85
+            lower.contains("fox sports") || lower.contains("fs1") || lower.contains("fs2") -> 85
+            lower.contains("eurosport") -> 80
+
+            // Movies & Premium Movies & Drama
+            lower.contains("hbo") -> 100
+            lower.contains("cinemax") -> 95
+            lower.contains("starz") -> 90
+            lower.contains("showtime") -> 90
+            lower.contains("sony pix") || lower.contains("sony max") -> 85
+            lower.contains("star gold") -> 85
+            lower.contains("zee cinema") -> 80
+
+            // Entertainment
+            lower.contains("abc") || lower.contains("cbs") || lower.contains("nbc") || lower.contains("fox") || lower.contains("the cw") || lower.contains("telemundo") -> {
+                if (lower.contains("news") || lower.contains("sport")) 70 else 80
+            }
+
+            // Documentaries
+            lower.contains("discovery channel") || lower.contains("discovery hd") -> 100
+            lower.contains("national geographic") || lower.contains("nat geo") -> 100
+            lower.contains("history channel") || lower.contains("history hd") -> 95
+            lower.contains("animal planet") -> 90
+            lower.contains("bbc earth") -> 90
+            lower.contains("smithsonian") -> 85
+
+            // Kids & Animation
+            lower.contains("disney channel") || lower.contains("disney junior") || lower.contains("disney jr") || lower.contains("disney xd") -> 100
+            lower.contains("nickelodeon") || lower.contains("nick jr") || lower.contains("nicktoons") -> 100
+            lower.contains("cartoon network") -> 95
+            lower.contains("boomerang") -> 90
+            lower.contains("duronto") -> 85
+            lower.contains("pbs kids") -> 85
+
+            // Bangla Channel & Bangla News
+            lower.contains("somoy") -> 100
+            lower.contains("jamuna") -> 95
+            lower.contains("ekattor") -> 90
+            lower.contains("ntv") -> 95
+            lower.contains("rtv") -> 90
+            lower.contains("channel i") -> 90
+            lower.contains("atn bangla") -> 85
+            lower.contains("maasranga") || lower.contains("massranga") -> 85
+
+            // Music
+            lower.contains("mtv") -> 100
+            lower.contains("vh1") -> 95
+            lower.contains("gaan bangla") -> 90
+
+            // Religious
+            lower.contains("peace tv") -> 100
+            lower.contains("al quran") || lower.contains("al_quran") || lower.contains("makkah") -> 100
+            lower.contains("al sunnah") || lower.contains("madina") -> 95
+
+            else -> 0
         }
     }
 }

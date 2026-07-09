@@ -10,6 +10,9 @@ import java.util.concurrent.TimeUnit
 object M3uParserService {
     private const val TAG = "M3uParserService"
 
+    @Volatile
+    var lastTvgUrl: String? = null
+
     private val okHttpClient: OkHttpClient by lazy {
         com.example.data.CachedHttpClient.getBaseClient()
     }
@@ -100,7 +103,16 @@ object M3uParserService {
             bufferedReader.useLines { lines ->
                 for (line in lines) {
                     val trimmedLine = line.trim()
-                    if (trimmedLine.startsWith("#EXTINF:")) {
+                    if (trimmedLine.startsWith("#EXTM3U", ignoreCase = true)) {
+                        val tvgUrlRegex = """(?:url-tvg|x-tvg-url)="([^"]*)"""".toRegex(RegexOption.IGNORE_CASE)
+                        val match = tvgUrlRegex.find(trimmedLine)
+                        if (match != null) {
+                            val url = match.groupValues[1].trim()
+                            if (url.isNotEmpty()) {
+                                lastTvgUrl = url
+                            }
+                        }
+                    } else if (trimmedLine.startsWith("#EXTINF:")) {
                         // Clear option cache for new channel entry
                         currentOptions.clear()
                         // Extract metadata tags using high-performance regex matches

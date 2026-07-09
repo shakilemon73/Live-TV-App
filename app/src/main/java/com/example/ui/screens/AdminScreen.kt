@@ -908,15 +908,22 @@ fun CloudSyncSettingsView(
     val syncStatusMessage by viewModel.syncStatusMessage.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
 
+    val appUpdateUrl by viewModel.appUpdateUrl.collectAsStateWithLifecycle()
+    val isUpdateChecking by viewModel.isUpdateChecking.collectAsStateWithLifecycle()
+    val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
+    val updateErrorMessage by viewModel.updateErrorMessage.collectAsStateWithLifecycle()
+
     var urlInput by remember { mutableStateOf(cloudGistUrl) }
     var autoSync by remember { mutableStateOf(autoSyncOnLaunch) }
     var publicMode by remember { mutableStateOf(isPublicMode) }
+    var updateUrlInput by remember { mutableStateOf(appUpdateUrl) }
 
     // Synchronize local UI state with ViewModel state on load
-    LaunchedEffect(cloudGistUrl, autoSyncOnLaunch, isPublicMode) {
+    LaunchedEffect(cloudGistUrl, autoSyncOnLaunch, isPublicMode, appUpdateUrl) {
         urlInput = cloudGistUrl
         autoSync = autoSyncOnLaunch
         publicMode = isPublicMode
+        updateUrlInput = appUpdateUrl
     }
 
     Column(
@@ -1329,6 +1336,131 @@ fun CloudSyncSettingsView(
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // App In-App Updates Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.SystemUpdate,
+                        contentDescription = "App Updates",
+                        tint = accentColor,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "In-App Update Settings",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = Color.White
+                    )
+                }
+
+                Text(
+                    text = "Update the application directly without using Play Store. Provide a JSON file specifying the latest version, APK link, and release notes.",
+                    fontSize = 12.sp,
+                    color = Color.LightGray,
+                    lineHeight = 16.sp
+                )
+
+                OutlinedTextField(
+                    value = updateUrlInput,
+                    onValueChange = { updateUrlInput = it },
+                    label = { Text("App Update JSON URL") },
+                    placeholder = { Text("https://example.com/app-update.json") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = accentColor,
+                        unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
+                        focusedContainerColor = Color(0xFF1C1B1F),
+                        unfocusedContainerColor = Color(0xFF1C1B1F)
+                    ),
+                    modifier = Modifier.fillMaxWidth().testTag("app_update_url_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            viewModel.setAppUpdateUrl(updateUrlInput.trim())
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White.copy(alpha = 0.12f),
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Save Update URL", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Button(
+                        onClick = {
+                            viewModel.checkForAppUpdates()
+                        },
+                        enabled = !isUpdateChecking && updateDownloadProgress == null,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = accentColor,
+                            contentColor = onPurpleColor
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f).testTag("check_updates_button")
+                    ) {
+                        if (isUpdateChecking) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = onPurpleColor,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Check Now", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                // Check Status/Errors/Update Availability
+                updateErrorMessage?.let { msg ->
+                    Text(
+                        text = msg,
+                        fontSize = 12.sp,
+                        color = if (msg.contains("up to date", ignoreCase = true)) Color(0xFF4CAF50) else Color(0xFFE53935),
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
+                updateDownloadProgress?.let { progress ->
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) {
+                        Text(
+                            text = "Downloading Update: ${(progress * 100).toInt()}%",
+                            fontSize = 12.sp,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            color = accentColor,
+                            trackColor = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
+                        )
                     }
                 }
             }

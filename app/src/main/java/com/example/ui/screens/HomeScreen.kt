@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import com.example.ui.components.VideoPlayer
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -114,6 +116,7 @@ fun HomeScreen(
     val streamCheckingStatus by viewModel.streamCheckingStatus.collectAsStateWithLifecycle()
     val filterBrokenChannels by viewModel.filterBrokenChannels.collectAsStateWithLifecycle()
     val selectedChannel by viewModel.selectedChannel.collectAsStateWithLifecycle()
+    val currentEpgProgramsMap by viewModel.currentEpgProgramsMap.collectAsStateWithLifecycle()
 
     val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
@@ -175,14 +178,31 @@ fun HomeScreen(
 
     val categoryRowState = rememberLazyListState()
     
+    var targetAlpha by remember { mutableStateOf(1f) }
+    val gridAlpha by animateFloatAsState(
+        targetValue = targetAlpha,
+        animationSpec = tween(durationMillis = 350, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+        label = "grid_fade_in"
+    )
+
+    LaunchedEffect(selectedCategoryId, showFavoritesOnly) {
+        targetAlpha = 0f
+        delay(20)
+        targetAlpha = 1f
+    }
+    
     // Auto-scroll the horizontal category scroller to bring the selected category chip into focus
-    LaunchedEffect(selectedCategoryId, populatedCategories) {
-        if (selectedCategoryId != null && populatedCategories.isNotEmpty()) {
+    LaunchedEffect(selectedCategoryId, showFavoritesOnly, populatedCategories) {
+        if (showFavoritesOnly) {
+            try {
+                categoryRowState.animateScrollToItem(1)
+            } catch (e: Exception) {}
+        } else if (selectedCategoryId != null && populatedCategories.isNotEmpty()) {
             val index = populatedCategories.indexOfFirst { it.id == selectedCategoryId }
             if (index != -1) {
                 try {
-                    // index + 1 because the "All" chip is at index 0
-                    categoryRowState.animateScrollToItem(index + 1)
+                    // index + 2 because "All" is at index 0 and "Starred" is at index 1
+                    categoryRowState.animateScrollToItem(index + 2)
                 } catch (e: Exception) {}
             }
         } else if (selectedCategoryId == null) {
@@ -458,141 +478,55 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     // Category Scroller & Filters
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Favorites toggle chip
-                        FilterChip(
-                            selected = showFavoritesOnly,
-                            onClick = { showFavoritesOnly = !showFavoritesOnly },
-                            label = { Text("Starred (${favorites.size})", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = if (showFavoritesOnly) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                    contentDescription = "Favorites",
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFFFF5252),
-                                selectedLabelColor = Color.White,
-                                selectedLeadingIconColor = Color.White,
-                                containerColor = cardBg,
-                                labelColor = Color(0xFFCAC4D0),
-                                iconColor = Color(0xFFCAC4D0)
-                            ),
-                            border = null,
-                            shape = CircleShape
-                        )
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        // Horizontal scrolling genre selection with active-centered state and channel counts
-                        LazyRow(
-                            state = categoryRowState,
+                    if (selectedCategoryId != null || showFavoritesOnly) {
+                        val filterText = if (showFavoritesOnly) {
+                            "Starred Channels"
+                        } else {
+                            categoryMap[selectedCategoryId] ?: "Category"
+                        }
+                        
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
                         ) {
-                            item {
-                                val isAllSelected = !showFavoritesOnly && selectedCategoryId == null
-                                FilterChip(
-                                    selected = isAllSelected,
-                                    onClick = {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(accentColor)
+                                    .clickable {
                                         showFavoritesOnly = false
                                         viewModel.selectCategory(null)
-                                    },
-                                    label = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("All Streams", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Box(
-                                                modifier = Modifier
-                                                    .background(
-                                                        if (isAllSelected) onPurpleColor.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f),
-                                                        CircleShape
-                                                    )
-                                                    .padding(horizontal = 7.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(
-                                                    text = "$totalActiveChannelsCount",
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = if (isAllSelected) onPurpleColor else Color.LightGray
-                                                )
-                                            }
-                                        }
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.Home,
-                                            contentDescription = "All",
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = accentColor,
-                                        selectedLabelColor = onPurpleColor,
-                                        selectedLeadingIconColor = onPurpleColor,
-                                        containerColor = cardBg,
-                                        labelColor = Color(0xFFCAC4D0),
-                                        iconColor = Color(0xFFCAC4D0)
-                                    ),
-                                    border = null,
-                                    shape = CircleShape,
-                                    modifier = Modifier.testTag("category_chip_all")
-                                )
-                            }
-
-                            items(items = populatedCategories, key = { it.id }) { category ->
-                                val isSelected = !showFavoritesOnly && selectedCategoryId == category.id
-                                val count = categoryCounts[category.id] ?: 0
-                                FilterChip(
-                                    selected = isSelected,
-                                    onClick = {
-                                        showFavoritesOnly = false
-                                        viewModel.selectCategory(category.id)
-                                    },
-                                    label = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(category.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Box(
-                                                modifier = Modifier
-                                                    .background(
-                                                        if (isSelected) onPurpleColor.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f),
-                                                        CircleShape
-                                                    )
-                                                    .padding(horizontal = 7.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(
-                                                    text = "$count",
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = if (isSelected) onPurpleColor else Color.LightGray
-                                                )
-                                            }
-                                        }
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = getCategoryIcon(category.name),
-                                            contentDescription = category.name,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = accentColor,
-                                        selectedLabelColor = onPurpleColor,
-                                        selectedLeadingIconColor = onPurpleColor,
-                                        containerColor = cardBg,
-                                        labelColor = Color(0xFFCAC4D0),
-                                        iconColor = Color(0xFFCAC4D0)
-                                    ),
-                                    border = null,
-                                    shape = CircleShape,
-                                    modifier = Modifier.testTag("category_chip_${category.id}")
-                                )
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .testTag("clear_filter_pill")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (showFavoritesOnly) Icons.Default.Favorite else Icons.Default.Category,
+                                        contentDescription = null,
+                                        tint = onPurpleColor,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = filterText.uppercase(),
+                                        color = onPurpleColor,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Clear Filter",
+                                        tint = onPurpleColor,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -870,6 +804,8 @@ fun HomeScreen(
                                 onClick = { 
                                     showSettings = false
                                     if (currentTab == 0) {
+                                        showFavoritesOnly = false
+                                        viewModel.selectCategory(null)
                                         coroutineScope.launch { lazyGridState.animateScrollToItem(0) }
                                     } else {
                                         viewModel.setCurrentTab(0)
@@ -1072,6 +1008,17 @@ fun HomeScreen(
                 channels
             }
 
+            val trendingChannels = remember(channels) {
+                if (channels.isEmpty()) {
+                    emptyList()
+                } else {
+                    channels.groupBy { it.categoryId }
+                        .values
+                        .map { it.first() }
+                        .take(3)
+                }
+            }
+
             PullToRefreshBox(
                 isRefreshing = isLoading,
                 onRefresh = { viewModel.syncWithCloudGist() },
@@ -1156,10 +1103,6 @@ fun HomeScreen(
                         }
                     }
                 } else {
-                    // World-Class OTT Dynamic Layout: Grid with Featured widescreen Hero Banner (breaks monotony)
-                    val featuredChannel = listToDisplay.firstOrNull()
-                    val remainingChannels = if (featuredChannel != null) listToDisplay.drop(1) else listToDisplay
-
                     LazyVerticalGrid(
                         state = lazyGridState,
                         columns = GridCells.Adaptive(minSize = 165.dp),
@@ -1171,7 +1114,9 @@ fun HomeScreen(
                         ),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = gridAlpha }
                     ) {
                         // RECENTLY WATCHED SECTION
                         if (recentlyWatched.isNotEmpty() && searchQuery.isEmpty() && !showFavoritesOnly) {
@@ -1190,7 +1135,7 @@ fun HomeScreen(
                                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.Refresh,
+                                            imageVector = Icons.Default.History,
                                             contentDescription = "Recently Watched",
                                             tint = accentColor,
                                             modifier = Modifier.size(16.dp)
@@ -1273,205 +1218,269 @@ fun HomeScreen(
                             }
                         }
 
-                        // FEATURED BANNER ROW (Spans both columns)
-                        if (featuredChannel != null && searchQuery.isEmpty() && !showFavoritesOnly) {
+                        // TRENDING BROADCASTS BENTO GRID SECTION
+                        if (searchQuery.isEmpty() && !showFavoritesOnly && selectedCategoryId == null && trendingChannels.isNotEmpty()) {
                             item(
                                 span = { GridItemSpan(maxLineSpan) },
-                                key = "featured_banner",
-                                contentType = "hero"
-                            ) {
-                                val categoryName = categoryMap[featuredChannel.categoryId] ?: "General"
-                                val repChannel = remember(featuredChannel) {
-                                    ChannelEntity(
-                                        id = featuredChannel.originalChannelIds.firstOrNull() ?: 0,
-                                        name = featuredChannel.name,
-                                        streamUrl = featuredChannel.streams.firstOrNull()?.url ?: "",
-                                        logoUrl = featuredChannel.logoUrl,
-                                        categoryId = featuredChannel.categoryId,
-                                        description = featuredChannel.description,
-                                        isFavorite = featuredChannel.isFavorite,
-                                        isBroken = featuredChannel.isBroken
-                                    )
-                                }
-                                HeroChannelBanner(
-                                    channel = repChannel,
-                                    categoryName = categoryName,
-                                    onClick = { onCardClick(featuredChannel) },
-                                    onToggleFavorite = { onFavoriteClick(featuredChannel) },
-                                    accentColor = accentColor,
-                                    isScrolling = isScrolling
-                                )
-                            }
-
-                            // Section Divider
-                            item(
-                                span = { GridItemSpan(maxLineSpan) },
-                                key = "section_divider",
-                                contentType = "divider"
-                            ) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "LIVE FEEDS BROADCASTING NOW",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color.Gray,
-                                    letterSpacing = 1.sp,
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                )
-                            }
-                        }
-
-                        val (eventsToHighlight, mainGridList) = if (searchQuery.isEmpty() && !showFavoritesOnly) {
-                            val selectedCategoryName = categoryMap[selectedCategoryId] ?: ""
-                            if (selectedCategoryName.trim().lowercase().contains("live event")) {
-                                Pair(emptyList<GroupedChannel>(), listToDisplay)
-                            } else {
-                                val evs = listToDisplay.filter {
-                                    val catName = categoryMap[it.categoryId] ?: ""
-                                    catName.trim().lowercase().contains("live event")
-                                }
-                                val regulars = remainingChannels.filter {
-                                    val catName = categoryMap[it.categoryId] ?: ""
-                                    !catName.trim().lowercase().contains("live event")
-                                }
-                                Pair(evs, regulars)
-                            }
-                        } else {
-                            Pair(emptyList<GroupedChannel>(), listToDisplay)
-                        }
-
-                        // LIVE EVENTS SECTION (Elite Horizontal Slider for Live Sports & Upcoming Events)
-                        if (eventsToHighlight.isNotEmpty()) {
-                            item(
-                                span = { GridItemSpan(maxLineSpan) },
-                                key = "live_events_row_item",
-                                contentType = "live_events_slider"
+                                key = "bento_trending_header",
+                                contentType = "bento_trending_header"
                             ) {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(bottom = 16.dp, top = 8.dp)
+                                        .padding(top = 16.dp, bottom = 8.dp)
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(8.dp)
-                                                .background(Color(0xFFE53935), CircleShape)
+                                        Icon(
+                                            imageVector = Icons.Default.Whatshot,
+                                            contentDescription = "Trending Now",
+                                            tint = Color(0xFFFF5722),
+                                            modifier = Modifier.size(20.dp)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "⚡ UPCOMING & ACTIVE LIVE EVENTS",
-                                            fontSize = 11.sp,
+                                            text = "TRENDING BROADCASTS",
+                                            fontSize = 14.sp,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = Color.White,
                                             letterSpacing = 1.sp
                                         )
                                     }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    LazyRow(
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        contentPadding = PaddingValues(vertical = 4.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        items(
-                                            items = eventsToHighlight,
-                                            key = { "event_${it.name}" },
-                                            contentType = { "live_event_card" }
-                                        ) { groupedChannel ->
-                                            Card(
-                                                shape = RoundedCornerShape(16.dp),
-                                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
-                                                colors = CardDefaults.cardColors(containerColor = cardBg),
-                                                modifier = Modifier
-                                                    .width(190.dp)
-                                                    .clickable { onCardClick(groupedChannel) }
-                                                    .testTag("live_event_${groupedChannel.name}")
-                                            ) {
-                                                Column(modifier = Modifier.padding(10.dp)) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .height(85.dp)
-                                                            .clip(RoundedCornerShape(10.dp))
-                                                            .background(Color.Black.copy(alpha = 0.3f))
-                                                    ) {
-                                                        SubcomposeAsyncImage(
-                                                            model = groupedChannel.logoUrl,
-                                                            contentDescription = groupedChannel.name,
-                                                            contentScale = ContentScale.Fit,
-                                                            modifier = Modifier.fillMaxSize().padding(6.dp),
-                                                            loading = {
-                                                                ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
-                                                            }
-                                                        )
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .align(Alignment.TopStart)
-                                                                .padding(6.dp)
-                                                                .background(Color(0xFFE53935), RoundedCornerShape(4.dp))
-                                                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                                                        ) {
-                                                            Text(
-                                                                text = "LIVE",
-                                                                color = Color.White,
-                                                                fontSize = 7.sp,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
-                                                        }
-                                                    }
-                                                    Spacer(modifier = Modifier.height(6.dp))
-                                                    Text(
-                                                        text = groupedChannel.name,
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = Color.White,
-                                                        maxLines = 2,
-                                                        minLines = 2,
-                                                        overflow = TextOverflow.Ellipsis,
-                                                        lineHeight = 15.sp
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "The most popular live streams across all categories",
+                                        fontSize = 11.sp,
+                                        color = Color.White.copy(alpha = 0.5f)
+                                    )
+                                }
+                            }
+
+                            // Featured Top Trending Channel (Large, spans 2 columns)
+                            val topTrending = trendingChannels.first()
+                            item(
+                                span = { GridItemSpan(if (maxLineSpan >= 2) 2 else 1) },
+                                key = "bento_trending_featured_${topTrending.name}",
+                                contentType = "bento_featured"
+                            ) {
+                                val catName = categoryMap[topTrending.categoryId] ?: "General"
+                                BentoFeaturedChannelCard(
+                                    channel = topTrending,
+                                    categoryName = catName,
+                                    onClick = { onCardClick(topTrending) },
+                                    onToggleFavorite = { onFavoriteClick(topTrending) },
+                                    cardBg = cardBg,
+                                    accentColor = accentColor,
+                                    isScrolling = isScrolling,
+                                    watchCount = viewModel.getChannelWatchCount(topTrending.name)
+                                )
+                            }
+
+                            // Other trending channels as compact cards
+                            val otherTrending = trendingChannels.drop(1)
+                            items(
+                                items = otherTrending,
+                                key = { "bento_trending_compact_${it.name}" },
+                                contentType = { "bento_compact" }
+                            ) { groupedChannel ->
+                                val catName = categoryMap[groupedChannel.categoryId] ?: "General"
+                                BentoCompactChannelCard(
+                                    channel = groupedChannel,
+                                    categoryName = catName,
+                                    onClick = { onCardClick(groupedChannel) },
+                                    cardBg = cardBg,
+                                    accentColor = accentColor,
+                                    isScrolling = isScrolling,
+                                    watchCount = viewModel.getChannelWatchCount(groupedChannel.name)
+                                )
+                            }
+
+                            // Horizontal Divider after Trending Bento section
+                            item(
+                                span = { GridItemSpan(maxLineSpan) },
+                                key = "bento_trending_divider",
+                                contentType = "bento_divider"
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
                                     HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
                                 }
                             }
                         }
 
-                        // GRID OF CHANNELS (Using unique stable keys & contentType to enable smooth recycle/scrolling)
-                        val displayList = if (searchQuery.isNotEmpty() || showFavoritesOnly) listToDisplay else mainGridList
-                        items(
-                            items = displayList,
-                            key = { it.name },
-                            contentType = { "channel" }
-                        ) { groupedChannel ->
-                            val repChannel = remember(groupedChannel) {
-                                ChannelEntity(
-                                    id = groupedChannel.originalChannelIds.firstOrNull() ?: 0,
-                                    name = groupedChannel.name,
-                                    streamUrl = groupedChannel.streams.firstOrNull()?.url ?: "",
-                                    logoUrl = groupedChannel.logoUrl,
-                                    categoryId = groupedChannel.categoryId,
-                                    description = groupedChannel.description,
-                                    isFavorite = groupedChannel.isFavorite,
-                                    isBroken = groupedChannel.isBroken
+                        if (searchQuery.isNotEmpty() || showFavoritesOnly) {
+                            // Standard flat grid when user is searching or viewing favorites
+                            items(
+                                items = listToDisplay,
+                                key = { "flat_${it.name}" },
+                                contentType = { "channel" }
+                            ) { groupedChannel ->
+                                val repChannel = remember(groupedChannel) {
+                                    ChannelEntity(
+                                        id = groupedChannel.originalChannelIds.firstOrNull() ?: 0,
+                                        name = groupedChannel.name,
+                                        streamUrl = groupedChannel.streams.firstOrNull()?.url ?: "",
+                                        logoUrl = groupedChannel.logoUrl,
+                                        categoryId = groupedChannel.categoryId,
+                                        description = groupedChannel.description,
+                                        isFavorite = groupedChannel.isFavorite,
+                                        isBroken = groupedChannel.isBroken
+                                    )
+                                }
+                                val categoryName = categoryMap[repChannel.categoryId] ?: "General"
+                                ChannelCard(
+                                    channel = repChannel,
+                                    categoryName = categoryName,
+                                    onClick = { onCardClick(groupedChannel) },
+                                    onToggleFavorite = { onFavoriteClick(groupedChannel) },
+                                    cardBg = cardBg,
+                                    accentColor = accentColor,
+                                    isScrolling = isScrolling
                                 )
                             }
-                            val categoryName = categoryMap[repChannel.categoryId] ?: "General"
-                            ChannelCard(
-                                channel = repChannel,
-                                categoryName = categoryName,
-                                onClick = { onCardClick(groupedChannel) },
-                                onToggleFavorite = { onFavoriteClick(groupedChannel) },
-                                cardBg = cardBg,
-                                accentColor = accentColor,
-                                isScrolling = isScrolling
-                            )
+                        } else if (selectedCategoryId != null) {
+                            // SINGLE CATEGORY DETAIL: Rich Bento Layout
+                            val currentCategoryName = categoryMap[selectedCategoryId] ?: "General"
+                            val currentCategoryChannels = listToDisplay
+
+                            if (currentCategoryChannels.isNotEmpty()) {
+                                // 1. Full-width Category Landmark Info Card
+                                item(
+                                    span = { GridItemSpan(maxLineSpan) },
+                                    key = "bento_single_info_${selectedCategoryId}",
+                                    contentType = "bento_info"
+                                ) {
+                                    BentoCategoryInfoCard(
+                                        categoryName = currentCategoryName,
+                                        count = currentCategoryChannels.size,
+                                        onClick = { /* Detail Mode */ },
+                                        cardBg = cardBg
+                                    )
+                                }
+
+                                // 2. Featured Top-Choice Widescreen Bento Card
+                                val topChannel = currentCategoryChannels.first()
+                                item(
+                                    span = { GridItemSpan(if (maxLineSpan >= 2) 2 else 1) },
+                                    key = "bento_single_featured_${topChannel.name}",
+                                    contentType = "bento_featured"
+                                ) {
+                                    BentoFeaturedChannelCard(
+                                        channel = topChannel,
+                                        categoryName = currentCategoryName,
+                                        onClick = { onCardClick(topChannel) },
+                                        onToggleFavorite = { onFavoriteClick(topChannel) },
+                                        cardBg = cardBg,
+                                        accentColor = accentColor,
+                                        isScrolling = isScrolling
+                                    )
+                                }
+
+                                // 3. 1x1 Compact Grid items for all other channels
+                                val otherChannels = currentCategoryChannels.drop(1)
+                                items(
+                                    items = otherChannels,
+                                    key = { "bento_single_compact_${it.name}" },
+                                    contentType = { "bento_compact" }
+                                ) { groupedChannel ->
+                                    BentoCompactChannelCard(
+                                        channel = groupedChannel,
+                                        categoryName = currentCategoryName,
+                                        onClick = { onCardClick(groupedChannel) },
+                                        cardBg = cardBg,
+                                        accentColor = accentColor,
+                                        isScrolling = isScrolling
+                                    )
+                                }
+                            }
+                        } else {
+                            // ALL CATEGORIES BENTO GRID PORTAL (Visual masterwork)
+                            for (category in populatedCategories) {
+                                val categoryGroupedChannels = channels.filter { it.categoryId == category.id }
+                                if (categoryGroupedChannels.isNotEmpty()) {
+                                    // A. Category Headline Row
+                                    item(
+                                        span = { GridItemSpan(maxLineSpan) },
+                                        key = "bento_header_${category.id}",
+                                        contentType = "bento_header"
+                                    ) {
+                                        BentoCategoryHeader(
+                                            categoryName = category.name,
+                                            count = categoryGroupedChannels.size,
+                                            onViewAllClick = { viewModel.selectCategory(category.id) }
+                                        )
+                                    }
+
+                                    // B. Featured Top Channel Card (Large, spans 2 columns)
+                                    val topChannel = categoryGroupedChannels.first()
+                                    item(
+                                        span = { GridItemSpan(if (maxLineSpan >= 2) 2 else 1) },
+                                        key = "bento_featured_${category.id}_${topChannel.name}",
+                                        contentType = "bento_featured"
+                                    ) {
+                                        BentoFeaturedChannelCard(
+                                            channel = topChannel,
+                                            categoryName = category.name,
+                                            onClick = { onCardClick(topChannel) },
+                                            onToggleFavorite = { onFavoriteClick(topChannel) },
+                                            cardBg = cardBg,
+                                            accentColor = accentColor,
+                                            isScrolling = isScrolling
+                                        )
+                                    }
+
+                                    // C. Category Spotlight Card (Spans 1 column)
+                                    item(
+                                        span = { GridItemSpan(1) },
+                                        key = "bento_info_${category.id}",
+                                        contentType = "bento_info"
+                                    ) {
+                                        BentoCategoryInfoCard(
+                                            categoryName = category.name,
+                                            count = categoryGroupedChannels.size,
+                                            onClick = { viewModel.selectCategory(category.id) },
+                                            cardBg = cardBg
+                                        )
+                                    }
+
+                                    // D. Compact Channel Sub-Cards (Up to 2 items to complete Bento structure)
+                                    val otherChannels = categoryGroupedChannels.drop(1)
+                                    val secondaryToShow = otherChannels.take(2)
+                                    
+                                    items(
+                                        items = secondaryToShow,
+                                        key = { "bento_compact_${category.id}_${it.name}" },
+                                        contentType = { "bento_compact" }
+                                    ) { groupedChannel ->
+                                        BentoCompactChannelCard(
+                                            channel = groupedChannel,
+                                            categoryName = category.name,
+                                            onClick = { onCardClick(groupedChannel) },
+                                            cardBg = cardBg,
+                                            accentColor = accentColor,
+                                            isScrolling = isScrolling
+                                        )
+                                    }
+
+                                    // E. "View All" Bento Link Card (Appended if category has more items)
+                                    if (categoryGroupedChannels.size > 4) {
+                                        item(
+                                            span = { GridItemSpan(1) },
+                                            key = "bento_view_all_${category.id}",
+                                            contentType = "bento_view_all"
+                                        ) {
+                                            BentoViewAllCard(
+                                                categoryName = category.name,
+                                                count = categoryGroupedChannels.size,
+                                                onClick = { viewModel.selectCategory(category.id) },
+                                                cardBg = cardBg,
+                                                accentColor = accentColor
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1960,11 +1969,65 @@ fun HomeScreen(
                     val allGroupedChannels = remember(allChannelsRaw) {
                         viewModel.groupChannels(allChannelsRaw)
                     }
-                    val filteredChannels = remember(allGroupedChannels, searchQuery) {
+                    val filteredChannels = remember(allGroupedChannels, searchQuery, currentEpgProgramsMap, allChannelsRaw) {
                         allGroupedChannels.filter { groupedChannel ->
+                            val epgProgram = currentEpgProgramsMap[groupedChannel.name.lowercase()]
+                                ?: allChannelsRaw.find { it.name.equals(groupedChannel.name, ignoreCase = true) }?.tvgId?.let { tvgId ->
+                                    currentEpgProgramsMap[tvgId.lowercase()]
+                                }
+                            
+                            val epgMatches = if (epgProgram != null) {
+                                epgProgram.title.contains(searchQuery, ignoreCase = true) ||
+                                epgProgram.description.contains(searchQuery, ignoreCase = true) ||
+                                epgProgram.category.contains(searchQuery, ignoreCase = true)
+                            } else {
+                                false
+                            }
+
                             groupedChannel.name.contains(searchQuery, ignoreCase = true) ||
                             groupedChannel.description.contains(searchQuery, ignoreCase = true) ||
-                            (categoryMap[groupedChannel.categoryId]?.contains(searchQuery, ignoreCase = true) == true)
+                            (categoryMap[groupedChannel.categoryId]?.contains(searchQuery, ignoreCase = true) == true) ||
+                            epgMatches
+                        }.sortedWith { ch1, ch2 ->
+                            val epg1 = currentEpgProgramsMap[ch1.name.lowercase()]
+                                ?: allChannelsRaw.find { it.name.equals(ch1.name, ignoreCase = true) }?.tvgId?.let { tvgId ->
+                                    currentEpgProgramsMap[tvgId.lowercase()]
+                                }
+                            val epg2 = currentEpgProgramsMap[ch2.name.lowercase()]
+                                ?: allChannelsRaw.find { it.name.equals(ch2.name, ignoreCase = true) }?.tvgId?.let { tvgId ->
+                                    currentEpgProgramsMap[tvgId.lowercase()]
+                                }
+
+                            val title1 = epg1?.title?.lowercase() ?: ""
+                            val title2 = epg2?.title?.lowercase() ?: ""
+                            val cat1 = epg1?.category?.lowercase() ?: ""
+                            val cat2 = epg2?.category?.lowercase() ?: ""
+
+                            val isSport1 = title1.contains("football") || title1.contains("soccer") || title1.contains("cricket") ||
+                                           cat1.contains("football") || cat1.contains("soccer") || cat1.contains("cricket") ||
+                                           ch1.name.lowercase().contains("football") || ch1.name.lowercase().contains("cricket") ||
+                                           ch1.name.lowercase().contains("willow") || ch1.name.lowercase().contains("t sports") ||
+                                           ch1.name.lowercase().contains("bein sport") || ch1.name.lowercase().contains("sky sports")
+
+                            val isSport2 = title2.contains("football") || title2.contains("soccer") || title2.contains("cricket") ||
+                                           cat2.contains("football") || cat2.contains("soccer") || cat2.contains("cricket") ||
+                                           ch2.name.lowercase().contains("football") || ch2.name.lowercase().contains("cricket") ||
+                                           ch2.name.lowercase().contains("willow") || ch2.name.lowercase().contains("t sports") ||
+                                           ch2.name.lowercase().contains("bein sport") || ch2.name.lowercase().contains("sky sports")
+
+                            when {
+                                isSport1 && !isSport2 -> -1
+                                !isSport1 && isSport2 -> 1
+                                else -> {
+                                    val rep1 = com.example.data.ChannelClassifier.getChannelReputationScore(ch1.name)
+                                    val rep2 = com.example.data.ChannelClassifier.getChannelReputationScore(ch2.name)
+                                    if (rep1 != rep2) {
+                                        rep2.compareTo(rep1)
+                                    } else {
+                                        ch1.name.compareTo(ch2.name, ignoreCase = true)
+                                    }
+                                }
+                            }
                         }
                     }
                     
@@ -2032,6 +2095,12 @@ fun HomeScreen(
                                     )
                                 }
                                 val categoryName = categoryMap[repChannel.categoryId] ?: "General"
+                                val epgProgram = remember(groupedChannel, currentEpgProgramsMap, allChannelsRaw) {
+                                    currentEpgProgramsMap[groupedChannel.name.lowercase()]
+                                        ?: allChannelsRaw.find { it.name.equals(groupedChannel.name, ignoreCase = true) }?.tvgId?.let { tvgId ->
+                                            currentEpgProgramsMap[tvgId.lowercase()]
+                                        }
+                                }
                                 ChannelCard(
                                     channel = repChannel,
                                     categoryName = categoryName,
@@ -2039,7 +2108,8 @@ fun HomeScreen(
                                     onToggleFavorite = { onFavoriteClick(groupedChannel) },
                                     cardBg = cardBg,
                                     accentColor = accentColor,
-                                    isScrolling = isScrolling
+                                    isScrolling = isScrolling,
+                                    currentProgram = epgProgram
                                 )
                             }
                         }
@@ -2387,6 +2457,7 @@ fun SkeletonCategoryCard(
     }
 }
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun ChannelCard(
     channel: ChannelEntity,
@@ -2395,7 +2466,8 @@ fun ChannelCard(
     onToggleFavorite: (ChannelEntity) -> Unit,
     cardBg: Color,
     accentColor: Color,
-    isScrolling: Boolean = false
+    isScrolling: Boolean = false,
+    currentProgram: com.example.data.EpgProgramEntity? = null
 ) {
     val secondaryAccentColor = Color(0xFFEADDFF)
     val favScale by animateFloatAsState(
@@ -2407,8 +2479,30 @@ fun ChannelCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    var isLongPressed by remember { mutableStateOf(false) }
 
-    val isScaleUp = isFocused || isHovered
+    LaunchedEffect(interactionSource) {
+        var pressJob: kotlinx.coroutines.Job? = null
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is androidx.compose.foundation.interaction.PressInteraction.Press -> {
+                    pressJob?.cancel()
+                    pressJob = launch {
+                        delay(600)
+                        isLongPressed = true
+                    }
+                }
+                is androidx.compose.foundation.interaction.PressInteraction.Release,
+                is androidx.compose.foundation.interaction.PressInteraction.Cancel -> {
+                    pressJob?.cancel()
+                    isLongPressed = false
+                }
+            }
+        }
+    }
+
+    val isPreviewPlaying = isHovered || isLongPressed
+    val isScaleUp = isFocused || isHovered || isLongPressed
     val cardScale by animateFloatAsState(
         targetValue = if (isScaleUp) 1.05f else 1.00f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
@@ -2471,6 +2565,45 @@ fun ChannelCard(
                         ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
                     }
                 )
+
+                val streamUrl = channel.streamUrl
+                if (isPreviewPlaying && streamUrl.isNotEmpty()) {
+                    VideoPlayer(
+                        videoUrl = streamUrl,
+                        isPlaying = true,
+                        isMuted = true,
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    
+                    // Small overlay badge
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                            .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .background(Color(0xFFE53935), CircleShape)
+                            )
+                            Text("PREVIEW", color = Color.White, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                            Icon(
+                                imageVector = Icons.Default.VolumeOff,
+                                contentDescription = "Muted Preview",
+                                tint = Color.White,
+                                modifier = Modifier.size(8.dp)
+                            )
+                        }
+                    }
+                }
 
                 // Dark subtle vignette gradient
                 Box(
@@ -2553,6 +2686,29 @@ fun ChannelCard(
                     overflow = TextOverflow.Ellipsis
                 )
 
+                if (currentProgram != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Playing Now",
+                            tint = accentColor,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Text(
+                            text = currentProgram.title,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = accentColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(3.dp))
 
                 Text(
@@ -2564,6 +2720,691 @@ fun ChannelCard(
                     lineHeight = 14.sp
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun BentoCategoryHeader(
+    categoryName: String,
+    count: Int,
+    onViewAllClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 22.dp, bottom = 10.dp, start = 4.dp, end = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 4.dp, height = 18.dp)
+                    .background(Color(0xFFE53935), RoundedCornerShape(2.dp))
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = categoryName.uppercase(),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Black,
+                color = Color.White,
+                letterSpacing = 1.2.sp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "$count FEEDS",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.LightGray
+                )
+            }
+        }
+        TextButton(
+            onClick = onViewAllClick,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+        ) {
+            Text(
+                text = "SEE ALL",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFFEADDFF)
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+            Icon(
+                imageVector = Icons.Default.ArrowBack,
+                contentDescription = null,
+                modifier = Modifier.size(12.dp).graphicsLayer(rotationZ = 180f),
+                tint = Color(0xFFEADDFF)
+            )
+        }
+    }
+}
+
+@Composable
+fun BentoCategoryInfoCard(
+    categoryName: String,
+    count: Int,
+    onClick: () -> Unit,
+    cardBg: Color
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val isScaleUp = isFocused || isHovered
+    val scale by animateFloatAsState(
+        targetValue = if (isScaleUp) 1.05f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "bento_info_scale"
+    )
+
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(130.dp)
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(brush = getCategoryGradient(categoryName), alpha = 0.8f)
+                .padding(16.dp)
+        ) {
+            Icon(
+                imageVector = getCategoryIcon(categoryName),
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.15f),
+                modifier = Modifier
+                    .size(80.dp)
+                    .align(Alignment.CenterEnd)
+                    .offset(x = 10.dp, y = 10.dp)
+            )
+
+            Column(
+                modifier = Modifier.fillMaxHeight(),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                        .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(50)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = getCategoryIcon(categoryName),
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                Column {
+                    Text(
+                        text = "EXPLORE",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f),
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        text = categoryName,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "$count Live Channels Available",
+                        fontSize = 10.sp,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+fun BentoFeaturedChannelCard(
+    channel: GroupedChannel,
+    categoryName: String,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    cardBg: Color,
+    accentColor: Color,
+    isScrolling: Boolean = false,
+    watchCount: Int = 0
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    var isLongPressed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(interactionSource) {
+        var pressJob: kotlinx.coroutines.Job? = null
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is androidx.compose.foundation.interaction.PressInteraction.Press -> {
+                    pressJob?.cancel()
+                    pressJob = launch {
+                        delay(600)
+                        isLongPressed = true
+                    }
+                }
+                is androidx.compose.foundation.interaction.PressInteraction.Release,
+                is androidx.compose.foundation.interaction.PressInteraction.Cancel -> {
+                    pressJob?.cancel()
+                    isLongPressed = false
+                }
+            }
+        }
+    }
+
+    val isPreviewPlaying = isHovered || isLongPressed
+    val isScaleUp = isFocused || isHovered || isLongPressed
+    val cardScale by animateFloatAsState(
+        targetValue = if (isScaleUp) 1.04f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "featured_card_scale"
+    )
+    val cardBorderColor by animateColorAsState(
+        targetValue = if (isScaleUp) accentColor else Color.White.copy(alpha = 0.1f),
+        animationSpec = tween(durationMillis = 200),
+        label = "featured_border_color"
+    )
+
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = BorderStroke(1.dp, cardBorderColor),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(130.dp)
+            .graphicsLayer(scaleX = cardScale, scaleY = cardScale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+            .testTag("bento_featured_${channel.name}")
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(brush = getCategoryGradient(categoryName), alpha = 0.25f)
+            )
+
+            val context = LocalContext.current
+            val imageRequest = remember(channel.logoUrl, isScrolling) {
+                ImageRequest.Builder(context)
+                    .data(channel.logoUrl)
+                    .apply {
+                        if (isScrolling) {
+                            networkCachePolicy(CachePolicy.DISABLED)
+                            diskCachePolicy(CachePolicy.DISABLED)
+                        } else {
+                            crossfade(true)
+                        }
+                    }
+                    .build()
+            }
+
+            SubcomposeAsyncImage(
+                model = imageRequest,
+                contentDescription = channel.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                loading = {
+                    ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
+                }
+            )
+
+            val streamUrl = remember(channel) { channel.streams.firstOrNull()?.url ?: "" }
+            if (isPreviewPlaying && streamUrl.isNotEmpty()) {
+                VideoPlayer(
+                    videoUrl = streamUrl,
+                    isPlaying = true,
+                    isMuted = true,
+                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(14.dp)
+                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(Color(0xFFE53935), CircleShape)
+                        )
+                        Text(
+                            text = "PREVIEW",
+                            color = Color.White,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Icon(
+                            imageVector = Icons.Default.VolumeOff,
+                            contentDescription = "Muted",
+                            tint = Color.White,
+                            modifier = Modifier.size(10.dp)
+                        )
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(Color.Black.copy(alpha = 0.95f), Color.Black.copy(alpha = 0.2f)),
+                            endX = 500f
+                        )
+                    )
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val hasBeenWatched = watchCount > 0
+                    val reputationScore = com.example.data.ChannelClassifier.getChannelReputationScore(channel.name)
+                    val labelText = when {
+                        hasBeenWatched -> "🔥 TRENDING ($watchCount PLAYS)"
+                        reputationScore >= 90 -> "🏆 TOP AUTHORIZED"
+                        else -> "⭐ EDITOR'S CHOICE"
+                    }
+                    val labelBgColor = when {
+                        hasBeenWatched -> Color(0xFFFF5722) // Fire Orange
+                        reputationScore >= 90 -> Color(0xFFFFD700) // Gold
+                        else -> accentColor
+                    }
+                    val labelTextColor = when {
+                        hasBeenWatched || reputationScore >= 90 -> Color.White
+                        else -> Color.Black
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .background(labelBgColor, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = labelText,
+                            color = labelTextColor,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                            .clickable { onToggleFavorite() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Favorite",
+                            tint = if (channel.isFavorite) Color(0xFFFF3F3F) else Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(0.75f)
+                ) {
+                    Text(
+                        text = channel.name,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = channel.description.ifBlank { "Stream premium live feed now." },
+                        fontSize = 10.sp,
+                        color = Color.White.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 16.dp)
+                    .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(50))
+                    .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(50)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Play",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+fun BentoCompactChannelCard(
+    channel: GroupedChannel,
+    categoryName: String,
+    onClick: () -> Unit,
+    cardBg: Color,
+    accentColor: Color,
+    isScrolling: Boolean = false,
+    watchCount: Int = 0
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    var isLongPressed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(interactionSource) {
+        var pressJob: kotlinx.coroutines.Job? = null
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is androidx.compose.foundation.interaction.PressInteraction.Press -> {
+                    pressJob?.cancel()
+                    pressJob = launch {
+                        delay(600)
+                        isLongPressed = true
+                    }
+                }
+                is androidx.compose.foundation.interaction.PressInteraction.Release,
+                is androidx.compose.foundation.interaction.PressInteraction.Cancel -> {
+                    pressJob?.cancel()
+                    isLongPressed = false
+                }
+            }
+        }
+    }
+
+    val isPreviewPlaying = isHovered || isLongPressed
+    val isScaleUp = isFocused || isHovered || isLongPressed
+    val cardScale by animateFloatAsState(
+        targetValue = if (isScaleUp) 1.05f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "compact_card_scale"
+    )
+    val cardBorderColor by animateColorAsState(
+        targetValue = if (isScaleUp) accentColor else Color.White.copy(alpha = 0.05f),
+        animationSpec = tween(durationMillis = 200),
+        label = "compact_border_color"
+    )
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
+        border = BorderStroke(1.dp, cardBorderColor),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(130.dp)
+            .graphicsLayer(scaleX = cardScale, scaleY = cardScale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+            .testTag("bento_compact_${channel.name}")
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1.0f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(brush = getCategoryGradient(categoryName), alpha = 0.15f)
+                )
+
+                val context = LocalContext.current
+                val imageRequest = remember(channel.logoUrl, isScrolling) {
+                    ImageRequest.Builder(context)
+                        .data(channel.logoUrl)
+                        .apply {
+                            if (isScrolling) {
+                                networkCachePolicy(CachePolicy.DISABLED)
+                                diskCachePolicy(CachePolicy.DISABLED)
+                            } else {
+                                crossfade(true)
+                            }
+                        }
+                        .build()
+                }
+
+                SubcomposeAsyncImage(
+                    model = imageRequest,
+                    contentDescription = channel.name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(14.dp),
+                    loading = {
+                        ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
+                    }
+                )
+
+                val streamUrl = remember(channel) { channel.streams.firstOrNull()?.url ?: "" }
+                if (isPreviewPlaying && streamUrl.isNotEmpty()) {
+                    VideoPlayer(
+                        videoUrl = streamUrl,
+                        isPlaying = true,
+                        isMuted = true,
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Small overlay badge
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(6.dp)
+                            .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(4.dp)
+                                    .background(Color(0xFFE53935), CircleShape)
+                            )
+                            Icon(
+                                imageVector = Icons.Default.VolumeOff,
+                                contentDescription = "Muted Preview",
+                                tint = Color.White,
+                                modifier = Modifier.size(8.dp)
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .size(6.dp)
+                        .background(Color(0xFFE53935), CircleShape)
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.3f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = channel.name,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (watchCount > 0) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Whatshot,
+                                contentDescription = "Trending",
+                                tint = Color(0xFFFF5722),
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = "$watchCount",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFF5722)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BentoViewAllCard(
+    categoryName: String,
+    count: Int,
+    onClick: () -> Unit,
+    cardBg: Color,
+    accentColor: Color
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val isScaleUp = isFocused || isHovered
+    val scale by animateFloatAsState(
+        targetValue = if (isScaleUp) 1.05f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "bento_view_all_scale"
+    )
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg.copy(alpha = 0.4f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(130.dp)
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(accentColor.copy(alpha = 0.12f), RoundedCornerShape(50))
+                    .border(1.dp, accentColor.copy(alpha = 0.3f), RoundedCornerShape(50)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(16.dp).graphicsLayer(rotationZ = 180f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "View All",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color.White,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+
+            Text(
+                text = "+${count - 4} Feeds",
+                fontSize = 10.sp,
+                color = accentColor,
+                fontWeight = FontWeight.Bold,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
         }
     }
 }
@@ -2601,12 +3442,15 @@ fun StaticCardIndicator(modifier: Modifier = Modifier) {
 fun getCategoryIcon(categoryName: String): ImageVector {
     val name = categoryName.lowercase().trim()
     return when {
-        name.contains("live event") || name.contains("event") -> Icons.Default.CheckCircle
+        name.contains("live sports") || name.contains("live event") || name.contains("event") -> Icons.Default.PlayArrow
+        name.contains("sports networks") || name.contains("sport") || name.contains("cricket") || name.contains("football") -> Icons.Default.Star
+        name.contains("premium movies") || name.contains("movie") || name.contains("drama") || name.contains("cinema") -> Icons.Default.PlayArrow
         name.contains("news") -> Icons.Default.Info
-        name.contains("sport") || name.contains("cricket") || name.contains("football") -> Icons.Default.Star
         name.contains("kid") || name.contains("cartoon") || name.contains("animation") || name.contains("child") -> Icons.Default.Face
         name.contains("music") -> Icons.Default.Favorite
-        name.contains("movie") || name.contains("drama") || name.contains("cinema") -> Icons.Default.PlayArrow
+        name.contains("classic") || name.contains("retro") -> Icons.Default.Refresh
+        name.contains("crime") || name.contains("investig") -> Icons.Default.Search
+        name.contains("lifestyle") || name.contains("cuis") -> Icons.Default.Favorite
         name.contains("religious") || name.contains("islam") || name.contains("prayer") -> Icons.Default.CheckCircle
         name.contains("bangla") || name.contains("local") -> Icons.Default.Home
         name.contains("science") || name.contains("document") || name.contains("info") -> Icons.Default.Search
@@ -2618,16 +3462,19 @@ fun getCategoryIcon(categoryName: String): ImageVector {
 fun getCategoryGradient(categoryName: String): androidx.compose.ui.graphics.Brush {
     val name = categoryName.lowercase().trim()
     val colors = when {
-        name.contains("live event") || name.contains("event") -> listOf(Color(0xFF8B0000), Color(0xFFFF1744))
-        name.contains("news") -> listOf(Color(0xFF8B0000), Color(0xFFE53935))
-        name.contains("sport") || name.contains("cricket") || name.contains("football") -> listOf(Color(0xFF0F5A26), Color(0xFF1DB954))
+        name.contains("live sports") || name.contains("live event") || name.contains("event") -> listOf(Color(0xFF8B0000), Color(0xFFFF1744))
+        name.contains("sports networks") || name.contains("sport") || name.contains("cricket") || name.contains("football") -> listOf(Color(0xFF0F5A26), Color(0xFF1DB954))
+        name.contains("premium movies") || name.contains("movie") || name.contains("drama") || name.contains("cinema") -> listOf(Color(0xFF0D47A1), Color(0xFF1976D2))
+        name.contains("news") -> listOf(Color(0xFF37474F), Color(0xFF546E7A))
         name.contains("entertainment") || name.contains("show") -> listOf(Color(0xFF4B0082), Color(0xFF8A2BE2))
         name.contains("kid") || name.contains("cartoon") || name.contains("animation") || name.contains("child") -> listOf(Color(0xFFD84B16), Color(0xFFFF9800))
-        name.contains("movie") || name.contains("drama") || name.contains("cinema") -> listOf(Color(0xFF0D47A1), Color(0xFF1976D2))
         name.contains("music") -> listOf(Color(0xFF880E4F), Color(0xFFE91E63))
+        name.contains("classic") || name.contains("retro") -> listOf(Color(0xFFE65100), Color(0xFFFFB300))
+        name.contains("crime") || name.contains("investig") -> listOf(Color(0xFF212121), Color(0xFF424242))
+        name.contains("lifestyle") || name.contains("cuis") -> listOf(Color(0xFFD81B60), Color(0xFFF48FB1))
         name.contains("religious") || name.contains("islam") || name.contains("prayer") -> listOf(Color(0xFF004D40), Color(0xFF009688))
-        name.contains("bangla") || name.contains("local") -> listOf(Color(0xFFE65100), Color(0xFFFFB300))
-        name.contains("science") || name.contains("document") || name.contains("info") -> listOf(Color(0xFF3E2723), Color(0xFF795548))
+        name.contains("bangla") || name.contains("local") -> listOf(Color(0xFF3E2723), Color(0xFF8D6E63))
+        name.contains("science") || name.contains("document") || name.contains("info") -> listOf(Color(0xFF006064), Color(0xFF00ACC1))
         else -> listOf(Color(0xFF263238), Color(0xFF455A64))
     }
     return androidx.compose.ui.graphics.Brush.verticalGradient(colors)
@@ -4977,6 +5824,171 @@ fun PremiumEmptyState(
                     text = "Scan Live Radar",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BentoCategoryTabStrip(
+    selectedCategoryId: Int?,
+    showFavoritesOnly: Boolean,
+    categories: List<CategoryEntity>,
+    categoryCounts: Map<Int, Int>,
+    totalActiveChannelsCount: Int,
+    favoritesCount: Int,
+    onSelectAll: () -> Unit,
+    onSelectFavorites: () -> Unit,
+    onSelectCategory: (Int) -> Unit,
+    cardBg: Color,
+    accentColor: Color,
+    onPurpleColor: Color,
+    state: LazyListState = rememberLazyListState()
+) {
+    LazyRow(
+        state = state,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp)
+    ) {
+        // Tab 1: All Streams
+        item {
+            val isSelected = !showFavoritesOnly && selectedCategoryId == null
+            BentoTabItem(
+                text = "All Streams",
+                count = totalActiveChannelsCount,
+                isSelected = isSelected,
+                onClick = onSelectAll,
+                icon = Icons.Default.Home,
+                accentColor = accentColor,
+                onPurpleColor = onPurpleColor,
+                cardBg = cardBg
+            )
+        }
+
+        // Tab 2: Starred
+        item {
+            val isSelected = showFavoritesOnly
+            BentoTabItem(
+                text = "Starred",
+                count = favoritesCount,
+                isSelected = isSelected,
+                onClick = onSelectFavorites,
+                icon = Icons.Default.Favorite,
+                accentColor = Color(0xFFFF5252),
+                onPurpleColor = Color.White,
+                cardBg = cardBg
+            )
+        }
+
+        // Tab 3..N: Categories
+        items(items = categories, key = { "tab_cat_${it.id}" }) { category ->
+            val isSelected = !showFavoritesOnly && selectedCategoryId == category.id
+            val count = categoryCounts[category.id] ?: 0
+            BentoTabItem(
+                text = category.name,
+                count = count,
+                isSelected = isSelected,
+                onClick = { onSelectCategory(category.id) },
+                icon = getCategoryIcon(category.name),
+                accentColor = accentColor,
+                onPurpleColor = onPurpleColor,
+                cardBg = cardBg
+            )
+        }
+    }
+}
+
+@Composable
+fun BentoTabItem(
+    text: String,
+    count: Int,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    icon: ImageVector,
+    accentColor: Color,
+    onPurpleColor: Color,
+    cardBg: Color
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val isScaled = isSelected || isFocused || isHovered
+
+    val scale by animateFloatAsState(
+        targetValue = if (isScaled) 1.05f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "bento_tab_scale"
+    )
+
+    val contentColor by animateColorAsState(
+        targetValue = if (isSelected) onPurpleColor else Color.White,
+        animationSpec = tween(durationMillis = 200),
+        label = "bento_tab_content_color"
+    )
+
+    val containerColor by animateColorAsState(
+        targetValue = if (isSelected) accentColor else cardBg,
+        animationSpec = tween(durationMillis = 200),
+        label = "bento_tab_bg"
+    )
+
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) accentColor.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f),
+        animationSpec = tween(durationMillis = 200),
+        label = "bento_tab_border"
+    )
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        border = BorderStroke(1.dp, borderColor),
+        modifier = Modifier
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = text,
+                tint = contentColor,
+                modifier = Modifier.size(15.dp)
+            )
+
+            Text(
+                text = text,
+                fontSize = 12.5.sp,
+                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Bold,
+                color = contentColor
+            )
+
+            Box(
+                modifier = Modifier
+                    .background(
+                        if (isSelected) onPurpleColor.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.08f),
+                        CircleShape
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "$count",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                    color = if (isSelected) onPurpleColor else Color.LightGray
                 )
             }
         }

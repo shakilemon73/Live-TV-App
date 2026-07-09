@@ -154,6 +154,8 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+
+                    com.example.ui.components.AppUpdateDialog(viewModel = vm)
                 }
             }
         }

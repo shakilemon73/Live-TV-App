@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import com.example.data.GroupedChannel
 import com.example.data.StreamSource
 import com.example.data.ChannelNameNormalizer
+import com.example.data.ChannelClassifier
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -108,6 +109,49 @@ class ChannelViewModel(
     private val _selectedChannel = MutableStateFlow<ChannelEntity?>(null)
     val selectedChannel: StateFlow<ChannelEntity?> = _selectedChannel.asStateFlow()
 
+    // --- EPG Program Flows ---
+    private val tickerFlow = flow {
+        while (true) {
+            emit(System.currentTimeMillis())
+            delay(30_000)
+        }
+    }.flowOn(Dispatchers.Default)
+     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), System.currentTimeMillis())
+
+    val currentEpgProgramsMap: StateFlow<Map<String, com.example.data.EpgProgramEntity>> = combine(
+        repository.getActiveEpgProgramsFlow(System.currentTimeMillis()),
+        tickerFlow
+    ) { programs, now ->
+        programs.filter { now in it.startTime..it.endTime }
+            .associateBy { it.channelId.lowercase() }
+    }.flowOn(Dispatchers.Default)
+     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val currentChannelEpgPrograms: StateFlow<List<com.example.data.EpgProgramEntity>> = _selectedChannel
+        .flatMapLatest { channel ->
+            if (channel != null) {
+                repository.getEpgProgramsForChannelFlow(channel.tvgId, channel.name)
+            } else {
+                flowOf(emptyList())
+            }
+        }.flowOn(Dispatchers.Default)
+         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val currentChannelEpgProgram: StateFlow<com.example.data.EpgProgramEntity?> = _selectedChannel
+        .flatMapLatest { channel ->
+            if (channel != null) {
+                repository.getCurrentProgramForChannelFlow(channel.tvgId, channel.name)
+            } else {
+                flowOf(null)
+            }
+        }.flowOn(Dispatchers.Default)
+         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    // Real-time user stats reactivity trigger
+    private val _userStatsTrigger = MutableStateFlow(0L)
+
     private val _recentlyWatchedNames = MutableStateFlow<List<String>>(
         (prefs.getString("recently_watched_channels", "") ?: "")
             .split("||")
@@ -122,7 +166,7 @@ class ChannelViewModel(
         val groupedAll = groupChannels(allChs)
         names.mapNotNull { name ->
             groupedAll.find { it.name.equals(name, ignoreCase = true) }
-        }.take(10)
+        }.take(5)
     }.flowOn(Dispatchers.Default)
      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -142,6 +186,66 @@ class ChannelViewModel(
         val attempts = channelAttemptsMap[channelId] ?: 0
         val failures = channelFailuresMap[channelId] ?: 0
         return if (attempts == 0) 0f else failures.toFloat() / attempts
+    }
+
+    // World top-notch engineering tracking & ranking system
+    fun getChannelWatchCount(name: String): Int {
+        return prefs.getInt("watch_count_${name.lowercase()}", 0)
+    }
+
+    fun getChannelLastWatched(name: String): Long {
+        return prefs.getLong("last_watched_${name.lowercase()}", 0L)
+    }
+
+    fun getChannelFailures(name: String): Int {
+        return prefs.getInt("failures_${name.lowercase()}", 0)
+    }
+
+    fun incrementChannelWatch(name: String) {
+        val lower = name.lowercase()
+        val current = prefs.getInt("watch_count_${lower}", 0)
+        prefs.edit()
+            .putInt("watch_count_${lower}", current + 1)
+            .putLong("last_watched_${lower}", System.currentTimeMillis())
+            .apply()
+        _userStatsTrigger.value = System.currentTimeMillis()
+    }
+
+    fun incrementChannelFailure(name: String) {
+        val lower = name.lowercase()
+        val current = prefs.getInt("failures_${lower}", 0)
+        prefs.edit()
+            .putInt("failures_${lower}", current + 1)
+            .apply()
+        _userStatsTrigger.value = System.currentTimeMillis()
+    }
+
+    fun calculateChannelRankScore(grouped: GroupedChannel): Double {
+        val name = grouped.name
+        val lower = name.lowercase()
+        val baseReputation = ChannelClassifier.getChannelReputationScore(name).toDouble()
+        val watchCount = prefs.getInt("watch_count_$lower", 0)
+        val failureCount = prefs.getInt("failures_$lower", 0)
+        val lastWatched = prefs.getLong("last_watched_$lower", 0L)
+        val isFavorite = grouped.isFavorite
+
+        val engagementScore = watchCount * 15.0
+        
+        val now = System.currentTimeMillis()
+        val recencyBonus = if (lastWatched > 0L) {
+            val diffMs = now - lastWatched
+            when {
+                diffMs < 3600_000 -> 40.0 // last hour
+                diffMs < 86400_000 -> 20.0 // last 24 hours
+                diffMs < 604800_000 -> 10.0 // last week
+                else -> 0.0
+            }
+        } else 0.0
+
+        val favoriteBonus = if (isFavorite) 50.0 else 0.0
+        val failurePenalty = failureCount * 25.0
+
+        return baseReputation + engagementScore + recencyBonus + favoriteBonus - failurePenalty
     }
 
     private val _isInPipMode = MutableStateFlow(false)
@@ -175,6 +279,114 @@ class ChannelViewModel(
 
     private val _isPublicMode = MutableStateFlow(prefs.getBoolean("is_public_mode", false))
     val isPublicMode: StateFlow<Boolean> = _isPublicMode.asStateFlow()
+
+    // --- App Update States ---
+    private val _appUpdateUrl = MutableStateFlow(prefs.getString("app_update_url", "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/app-update.json") ?: "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/app-update.json")
+    val appUpdateUrl: StateFlow<String> = _appUpdateUrl.asStateFlow()
+
+    private val _isUpdateChecking = MutableStateFlow(false)
+    val isUpdateChecking: StateFlow<Boolean> = _isUpdateChecking.asStateFlow()
+
+    private val _updateInfo = MutableStateFlow<com.example.data.UpdateInfo?>(null)
+    val updateInfo: StateFlow<com.example.data.UpdateInfo?> = _updateInfo.asStateFlow()
+
+    private val _updateDownloadProgress = MutableStateFlow<Float?>(null)
+    val updateDownloadProgress: StateFlow<Float?> = _updateDownloadProgress.asStateFlow()
+
+    private val _updateErrorMessage = MutableStateFlow<String?>(null)
+    val updateErrorMessage: StateFlow<String?> = _updateErrorMessage.asStateFlow()
+
+    private val _updateWarningMessage = MutableStateFlow<String?>(null)
+    val updateWarningMessage: StateFlow<String?> = _updateWarningMessage.asStateFlow()
+
+    private val _downloadedFile = MutableStateFlow<java.io.File?>(null)
+    val downloadedFile: StateFlow<java.io.File?> = _downloadedFile.asStateFlow()
+
+    private val _showUpdateDialog = MutableStateFlow(false)
+    val showUpdateDialog: StateFlow<Boolean> = _showUpdateDialog.asStateFlow()
+
+    fun setAppUpdateUrl(url: String) {
+        prefs.edit().putString("app_update_url", url).apply()
+        _appUpdateUrl.value = url
+    }
+
+    fun checkForAppUpdates(isAutoCheck: Boolean = false) {
+        viewModelScope.launch {
+            _isUpdateChecking.value = true
+            _updateErrorMessage.value = null
+            _updateWarningMessage.value = null
+            _downloadedFile.value = null
+            _updateInfo.value = null
+            
+            val info = com.example.data.AppUpdateManager.checkForUpdates(_appUpdateUrl.value)
+            _isUpdateChecking.value = false
+            
+            if (info != null) {
+                val currentVersionCode = com.example.BuildConfig.VERSION_CODE
+                if (info.versionCode > currentVersionCode) {
+                    _updateInfo.value = info
+                    val lastDownloadedVersion = prefs.getInt("last_downloaded_update_version", 0)
+                    if (!isAutoCheck || info.versionCode > lastDownloadedVersion) {
+                        _showUpdateDialog.value = true
+                    } else {
+                        _updateErrorMessage.value = "New update is available but already downloaded (v${info.versionName})"
+                    }
+                } else {
+                    _updateErrorMessage.value = "Your app is up to date (v${com.example.BuildConfig.VERSION_NAME})"
+                }
+            } else {
+                _updateErrorMessage.value = "Failed to fetch update info or connection error."
+            }
+        }
+    }
+
+    fun startAppUpdateDownload(context: android.content.Context) {
+        val info = _updateInfo.value ?: return
+        viewModelScope.launch {
+            _updateErrorMessage.value = null
+            _updateWarningMessage.value = null
+            _downloadedFile.value = null
+            _updateDownloadProgress.value = 0f
+            
+            com.example.data.AppUpdateManager.downloadAndInstallApk(
+                context = context,
+                apkUrl = info.apkUrl,
+                expectedSha256 = info.sha256,
+                onProgress = { progress ->
+                    _updateDownloadProgress.value = progress
+                },
+                onVerificationWarning = { warning, file ->
+                    _updateDownloadProgress.value = null
+                    _updateWarningMessage.value = warning
+                    _downloadedFile.value = file
+                    prefs.edit().putInt("last_downloaded_update_version", info.versionCode).apply()
+                },
+                onSuccess = { file ->
+                    _updateDownloadProgress.value = null
+                    _downloadedFile.value = file
+                    prefs.edit().putInt("last_downloaded_update_version", info.versionCode).apply()
+                    com.example.data.AppUpdateManager.installApk(context, file)
+                },
+                onError = { error ->
+                    _updateDownloadProgress.value = null
+                    _updateErrorMessage.value = error
+                    _downloadedFile.value = null
+                }
+            )
+        }
+    }
+
+    fun installDownloadedApk(context: android.content.Context) {
+        val file = _downloadedFile.value ?: return
+        com.example.data.AppUpdateManager.installApk(context, file)
+    }
+
+    fun dismissUpdateDialog() {
+        _showUpdateDialog.value = false
+        _updateDownloadProgress.value = null
+        _updateWarningMessage.value = null
+        _downloadedFile.value = null
+    }
 
     private val _lowLatencyMode = MutableStateFlow(prefs.getBoolean("low_latency_mode", true))
     val lowLatencyMode: StateFlow<Boolean> = _lowLatencyMode.asStateFlow()
@@ -226,16 +438,21 @@ class ChannelViewModel(
     }.flowOn(Dispatchers.Default)
      .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val filteredGroupedChannels: StateFlow<List<GroupedChannel>> = filteredChannels
-        .map { list -> groupChannels(list) }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val filteredGroupedChannels: StateFlow<List<GroupedChannel>> = combine(
+        filteredChannels,
+        _userStatsTrigger
+    ) { list, _ ->
+        groupChannels(list).sortedByDescending { calculateChannelRankScore(it) }
+    }.flowOn(Dispatchers.Default)
+     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val favoriteGroupedChannels: StateFlow<List<GroupedChannel>> = favoriteChannels
-        .map { list -> list.filter { !it.isBroken } }
-        .map { list -> groupChannels(list) }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val favoriteGroupedChannels: StateFlow<List<GroupedChannel>> = combine(
+        favoriteChannels,
+        _userStatsTrigger
+    ) { list, _ ->
+        groupChannels(list.filter { !it.isBroken }).sortedByDescending { calculateChannelRankScore(it) }
+    }.flowOn(Dispatchers.Default)
+     .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // --- Recordings State ---
     val recordings: StateFlow<List<RecordingEntity>> = repository.allRecordings
@@ -456,6 +673,13 @@ class ChannelViewModel(
                         }
                     }
                 }
+            }
+
+            // Auto-check for app updates on launch
+            try {
+                checkForAppUpdates(isAutoCheck = true)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
@@ -735,6 +959,9 @@ class ChannelViewModel(
             channelAttemptsMap[channel.id] = attempts
             android.util.Log.i("LiveTvTelemetry", "Playback attempt registered for channel ${channel.id}. Total attempts: $attempts")
             
+            // Record dynamic behavioral watch stats
+            incrementChannelWatch(channel.name)
+
             _currentStreamUrl.value = channel.streamUrl
             val groups = groupChannels(channels.value)
             val group = groups.find { it.originalChannelIds.contains(channel.id) }
@@ -745,7 +972,7 @@ class ChannelViewModel(
             val currentNames = _recentlyWatchedNames.value.toMutableList()
             currentNames.remove(channel.name)
             currentNames.add(0, channel.name)
-            val updatedNames = currentNames.take(10)
+            val updatedNames = currentNames.take(5)
             _recentlyWatchedNames.value = updatedNames
             prefs.edit().putString("recently_watched_channels", updatedNames.joinToString("||")).apply()
 
@@ -776,6 +1003,9 @@ class ChannelViewModel(
             errorCountMap[failedUrl] = count
             
             val channel = channels.value.find { it.id == channelId }
+            if (channel != null) {
+                incrementChannelFailure(channel.name)
+            }
             val chName = channel?.name ?: "Unknown Channel"
             com.example.data.StreamLogManager.logError(
                 type = "Playback",
@@ -923,15 +1153,25 @@ class ChannelViewModel(
             _isEventsLoading.value = true
             _eventsError.value = null
             
-            val content = withContext(Dispatchers.IO) {
-                com.example.data.M3uParserService.fetchM3uContent("https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8")
+            val combinedParsedChannels = withContext(Dispatchers.IO) {
+                val deferred1 = async { com.example.data.M3uParserService.fetchM3uContent("https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8") }
+                val deferred2 = async { com.example.data.M3uParserService.fetchM3uContent("https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/live-event.m3u") }
+                val content1 = deferred1.await()
+                val content2 = deferred2.await()
+                
+                val list = mutableListOf<com.example.data.M3uParserService.ParsedChannel>()
+                if (content1 != null) {
+                    list.addAll(com.example.data.M3uParserService.parseM3uText(content1))
+                }
+                if (content2 != null) {
+                    list.addAll(com.example.data.M3uParserService.parseM3uText(content2))
+                }
+                list
             }
             
-            if (content != null) {
-                val (parsedList, grouped) = withContext(Dispatchers.Default) {
-                    val parsed = com.example.data.M3uParserService.parseM3uText(content)
-                    val grp = com.example.data.LiveEventParser.mapParsedChannelsToGroupedEvents(parsed)
-                    Pair(parsed, grp)
+            if (combinedParsedChannels.isNotEmpty()) {
+                val grouped = withContext(Dispatchers.Default) {
+                    com.example.data.LiveEventParser.mapParsedChannelsToGroupedEvents(combinedParsedChannels)
                 }
                 _fetchedLiveEvents.value = grouped
                 
