@@ -38,6 +38,8 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.data.StreamSource
+import com.example.data.StreamDecryptionUtility
+import com.example.data.AppIntegrityChecker
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -89,6 +91,13 @@ fun VideoPlayer(
     onStreamSwapped: ((StreamSource) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val decryptedVideoUrl = remember(videoUrl) {
+        if (videoUrl.startsWith("encrypted://")) {
+            StreamDecryptionUtility.decrypt(videoUrl)
+        } else {
+            videoUrl
+        }
+    }
     var hasError by remember { mutableStateOf(false) }
     var isBuffering by remember { mutableStateOf(false) }
 
@@ -483,12 +492,22 @@ fun VideoPlayer(
     }
 
     // Play/prepare when URL or settings change with precise Live Configuration
-    LaunchedEffect(exoPlayer, videoUrl, lowLatencyEnabled) {
+    LaunchedEffect(exoPlayer, decryptedVideoUrl, lowLatencyEnabled) {
         if (exoPlayer == null) return@LaunchedEffect
         
+        // 1. Run application integrity check to prevent proxying or reverse engineering
+        // Programmatically terminates the session if a threat is detected on non-emulator devices
+        val isIntegrityValid = AppIntegrityChecker.verifyIntegrity(context, forceKill = true)
+        if (!isIntegrityValid) {
+            android.util.Log.e("VideoPlayer", "Integrity check failed! Playback blocked.")
+            hasError = true
+            isBuffering = false
+            return@LaunchedEffect
+        }
+
         // Prevent redundant channel selection logic from triggering prepare() if already actively playing/buffering the same URL
         val currentMediaUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
-        val isSameUrl = currentMediaUri == videoUrl
+        val isSameUrl = currentMediaUri == decryptedVideoUrl
         
         // Only skip if the player is already playing or actively buffering the same URL, and has no playback error
         if (isSameUrl && 
@@ -507,7 +526,7 @@ fun VideoPlayer(
         rebufferCount = 0
         hasReachedReady = false
         
-        val mimeType = getMimeTypeForUrl(videoUrl)
+        val mimeType = getMimeTypeForUrl(decryptedVideoUrl)
         
         val liveConfig = if (lowLatencyEnabled) {
             MediaItem.LiveConfiguration.Builder()
@@ -524,8 +543,8 @@ fun VideoPlayer(
         }
 
         val mediaItem = MediaItem.Builder()
-            .setUri(videoUrl)
-            .setMimeType(if (mimeType == null && videoUrl.contains(".m3u8", ignoreCase = true)) MimeTypes.APPLICATION_M3U8 else mimeType)
+            .setUri(decryptedVideoUrl)
+            .setMimeType(if (mimeType == null && decryptedVideoUrl.contains(".m3u8", ignoreCase = true)) MimeTypes.APPLICATION_M3U8 else mimeType)
             .setLiveConfiguration(liveConfig)
             .build()
         exoPlayer.setMediaItem(mediaItem)

@@ -27,6 +27,58 @@ object M3uParserService {
         val description: String
     )
 
+    private val memoryCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun getProtectedPlaylistFile(context: android.content.Context, url: String): java.io.File {
+        val dir = java.io.File(context.filesDir, "protected_playlists")
+        if (!dir.exists()) {
+            dir.mkdirs()
+        }
+        val hash = try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val hashBytes = digest.digest(url.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+            hashBytes.joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            url.hashCode().toString()
+        }
+        return java.io.File(dir, "playlist_$hash.enc")
+    }
+
+    fun savePlaylistSecurely(context: android.content.Context, url: String, content: String) {
+        memoryCache[url] = content
+        try {
+            val file = getProtectedPlaylistFile(context, url)
+            val encrypted = StreamDecryptionUtility.encrypt(content)
+            file.writeText(encrypted, java.nio.charset.StandardCharsets.UTF_8)
+            Log.i(TAG, "Playlist securely saved to protected file directory (encrypted).")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save playlist securely to file", e)
+        }
+    }
+
+    fun loadPlaylistSecurely(context: android.content.Context, url: String): String? {
+        val cached = memoryCache[url]
+        if (cached != null) {
+            Log.i(TAG, "Playlist loaded from memory-only cache.")
+            return cached
+        }
+        try {
+            val file = getProtectedPlaylistFile(context, url)
+            if (file.exists()) {
+                val encrypted = file.readText(java.nio.charset.StandardCharsets.UTF_8)
+                val decrypted = StreamDecryptionUtility.decrypt(encrypted)
+                if (decrypted.isNotEmpty() && decrypted != encrypted) {
+                    memoryCache[url] = decrypted
+                    Log.i(TAG, "Playlist securely loaded from protected file directory (decrypted).")
+                    return decrypted
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load playlist securely from file", e)
+        }
+        return null
+    }
+
     /**
      * Helper to normalize playlist URLs (e.g. GitHub raw, Pastebin raw, etc.)
      */
@@ -57,7 +109,18 @@ object M3uParserService {
     /**
      * Fetches raw M3U text content from a remote URL.
      */
-    fun fetchM3uContent(url: String): String? {
+    fun fetchM3uContent(url: String, context: android.content.Context? = null): String? {
+        if (context != null) {
+            val cached = loadPlaylistSecurely(context, url)
+            if (cached != null) return cached
+        } else {
+            val cached = memoryCache[url]
+            if (cached != null) {
+                Log.i(TAG, "Playlist loaded from memory-only cache (no context).")
+                return cached
+            }
+        }
+
         val normalized = normalizeUrl(url)
         val request = Request.Builder()
             .url(normalized)
@@ -67,7 +130,15 @@ object M3uParserService {
         return try {
             okHttpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
-                    response.body?.string()
+                    val content = response.body?.string()
+                    if (content != null) {
+                        if (context != null) {
+                            savePlaylistSecurely(context, url, content)
+                        } else {
+                            memoryCache[url] = content
+                        }
+                    }
+                    content
                 } else {
                     Log.e(TAG, "Failed to fetch M3U playlist from $normalized: Code ${response.code}")
                     null

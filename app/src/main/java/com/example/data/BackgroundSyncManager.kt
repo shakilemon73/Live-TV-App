@@ -44,12 +44,19 @@ class BackgroundSyncManager(
     suspend fun checkStreamUrl(streamUrl: String): Boolean = withContext(Dispatchers.IO) {
         if (streamUrl.isBlank()) return@withContext false
 
-        var cleanUrl = streamUrl
+        val decryptedUrl = if (streamUrl.startsWith("encrypted://")) {
+            StreamDecryptionUtility.decrypt(streamUrl, context)
+        } else {
+            streamUrl
+        }
+        if (decryptedUrl.isBlank()) return@withContext false
+
+        var cleanUrl = decryptedUrl
         val customHeaders = mutableMapOf<String, String>()
 
-        if (streamUrl.contains("|")) {
+        if (decryptedUrl.contains("|")) {
             try {
-                val parts = streamUrl.split("|", limit = 2)
+                val parts = decryptedUrl.split("|", limit = 2)
                 cleanUrl = parts[0]
                 val headerParams = parts[1]
                 headerParams.split("&").forEach { param ->

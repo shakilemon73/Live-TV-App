@@ -74,6 +74,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.focusable
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
@@ -133,9 +134,11 @@ fun HomeScreen(
         }
     }
 
-    BackHandler(enabled = (showSettings || currentTab != 0)) {
+    BackHandler(enabled = (showSettings || currentTab != 0 || selectedCategoryId != null)) {
         if (showSettings) {
             showSettings = false
+        } else if (selectedCategoryId != null) {
+            viewModel.selectCategory(null)
         } else {
             viewModel.setCurrentTab(0)
             viewModel.setSearchQuery("")
@@ -475,59 +478,53 @@ fun HomeScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Category Scroller & Filters
-                    if (selectedCategoryId != null || showFavoritesOnly) {
-                        val filterText = if (showFavoritesOnly) {
-                            "Starred Channels"
-                        } else {
-                            categoryMap[selectedCategoryId] ?: "Category"
-                        }
-                        
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(accentColor)
-                                    .clickable {
-                                        showFavoritesOnly = false
-                                        viewModel.selectCategory(null)
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                                    .testTag("clear_filter_pill")
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (showFavoritesOnly) Icons.Default.Favorite else Icons.Default.Category,
-                                        contentDescription = null,
-                                        tint = onPurpleColor,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = filterText.uppercase(),
-                                        color = onPurpleColor,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        letterSpacing = 0.5.sp
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Clear Filter",
-                                        tint = onPurpleColor,
-                                        modifier = Modifier.size(14.dp)
-                                    )
+                    LazyRow(
+                        state = categoryRowState,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        item {
+                            CategoryFilterChip(
+                                selected = selectedCategoryId == null && !showFavoritesOnly,
+                                label = "ALL BROADCASTS",
+                                icon = Icons.Default.AllInclusive,
+                                count = totalActiveChannelsCount,
+                                onClick = {
+                                    showFavoritesOnly = false
+                                    viewModel.selectCategory(null)
                                 }
-                            }
+                            )
+                        }
+
+                        item {
+                            CategoryFilterChip(
+                                selected = showFavoritesOnly,
+                                label = "STARRED",
+                                icon = Icons.Default.Favorite,
+                                count = favorites.size,
+                                onClick = {
+                                    showFavoritesOnly = true
+                                    viewModel.selectCategory(null)
+                                }
+                            )
+                        }
+
+                        items(populatedCategories) { category ->
+                            val count = categoryCounts[category.id] ?: 0
+                            CategoryFilterChip(
+                                selected = selectedCategoryId == category.id && !showFavoritesOnly,
+                                label = category.name.uppercase(),
+                                icon = getCategoryIcon(category.name),
+                                count = count,
+                                onClick = {
+                                    showFavoritesOnly = false
+                                    viewModel.selectCategory(category.id)
+                                }
+                            )
                         }
                     }
                     
@@ -1103,6 +1100,10 @@ fun HomeScreen(
                         }
                     }
                 } else {
+                    val featuredChannel = remember(channels) {
+                        channels.firstOrNull { it.name.lowercase().contains("sports") || it.name.lowercase().contains("news") || it.name.lowercase().contains("cricket") || it.name.lowercase().contains("football") }
+                            ?: channels.firstOrNull()
+                    }
                     LazyVerticalGrid(
                         state = lazyGridState,
                         columns = GridCells.Adaptive(minSize = 165.dp),
@@ -1118,6 +1119,30 @@ fun HomeScreen(
                             .fillMaxSize()
                             .graphicsLayer { alpha = gridAlpha }
                     ) {
+                        // PREMIUM CINEMATIC HERO BANNER (Top spotlight recommendation)
+                        if (searchQuery.isEmpty() && !showFavoritesOnly && selectedCategoryId == null && channels.isNotEmpty()) {
+                            if (featuredChannel != null) {
+                                item(
+                                    span = { GridItemSpan(maxLineSpan) },
+                                    key = "premium_hero_banner_item",
+                                    contentType = "hero_banner"
+                                ) {
+                                    val catName = categoryMap[featuredChannel.categoryId] ?: "General"
+                                    val currentEpg = currentEpgProgramsMap[featuredChannel.name.lowercase()]
+                                    PremiumHeroBanner(
+                                        channel = featuredChannel,
+                                        categoryName = catName,
+                                        currentProgram = currentEpg,
+                                        onClick = { onCardClick(featuredChannel) },
+                                        onToggleFavorite = { onFavoriteClick(featuredChannel) },
+                                        cardBg = cardBg,
+                                        accentColor = accentColor,
+                                        modifier = Modifier.padding(bottom = 16.dp)
+                                    )
+                                }
+                            }
+                        }
+
                         // RECENTLY WATCHED SECTION
                         if (recentlyWatched.isNotEmpty() && searchQuery.isEmpty() && !showFavoritesOnly) {
                             item(
@@ -2479,6 +2504,7 @@ fun ChannelCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
     var isLongPressed by remember { mutableStateOf(false) }
 
     LaunchedEffect(interactionSource) {
@@ -2504,7 +2530,11 @@ fun ChannelCard(
     val isPreviewPlaying = isHovered || isLongPressed
     val isScaleUp = isFocused || isHovered || isLongPressed
     val cardScale by animateFloatAsState(
-        targetValue = if (isScaleUp) 1.05f else 1.00f,
+        targetValue = when {
+            isPressed -> 0.96f
+            isScaleUp -> 1.04f
+            else -> 1.00f
+        },
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "cardScaleAnimation"
     )
@@ -2730,60 +2760,95 @@ fun BentoCategoryHeader(
     count: Int,
     onViewAllClick: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    
+    val arrowTranslation by animateFloatAsState(
+        targetValue = if (isHovered || isFocused) 4f else 0f,
+        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        label = "arrow_anim"
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 22.dp, bottom = 10.dp, start = 4.dp, end = 4.dp),
+            .padding(top = 24.dp, bottom = 12.dp, start = 4.dp, end = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(width = 4.dp, height = 18.dp)
-                    .background(Color(0xFFE53935), RoundedCornerShape(2.dp))
+                    .size(8.dp)
+                    .background(Color(0xFFE53935), CircleShape)
             )
-            Spacer(modifier = Modifier.width(10.dp))
+            
             Text(
                 text = categoryName.uppercase(),
-                fontSize = 15.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Black,
                 color = Color.White,
-                letterSpacing = 1.2.sp
+                letterSpacing = 1.5.sp
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            
             Box(
                 modifier = Modifier
-                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                    .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
                     .padding(horizontal = 8.dp, vertical = 2.dp)
             ) {
                 Text(
-                    text = "$count FEEDS",
+                    text = "$count LIVE",
                     fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.LightGray
+                    fontWeight = FontWeight.Black,
+                    color = Color(0xFFD0BCFF),
+                    letterSpacing = 0.5.sp
                 )
             }
         }
-        TextButton(
-            onClick = onViewAllClick,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+        
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isHovered || isFocused) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.04f)
+            ),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+            modifier = Modifier
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = androidx.compose.foundation.LocalIndication.current,
+                    onClick = onViewAllClick
+                )
+                .focusable(interactionSource = interactionSource)
         ) {
-            Text(
-                text = "SEE ALL",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFFEADDFF)
-            )
-            Spacer(modifier = Modifier.width(2.dp))
-            Icon(
-                imageVector = Icons.Default.ArrowBack,
-                contentDescription = null,
-                modifier = Modifier.size(12.dp).graphicsLayer(rotationZ = 180f),
-                tint = Color(0xFFEADDFF)
-            )
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "VIEW COLLECTION",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFD0BCFF),
+                    letterSpacing = 0.8.sp
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowBack,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(11.dp)
+                        .graphicsLayer(
+                            rotationZ = 180f,
+                            translationX = arrowTranslation
+                        ),
+                    tint = Color(0xFFD0BCFF)
+                )
+            }
         }
     }
 }
@@ -2798,20 +2863,50 @@ fun BentoCategoryInfoCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
     val isScaleUp = isFocused || isHovered
     val scale by animateFloatAsState(
-        targetValue = if (isScaleUp) 1.05f else 1.0f,
+        targetValue = when {
+            isPressed -> 0.96f
+            isScaleUp -> 1.04f
+            else -> 1.0f
+        },
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "bento_info_scale"
     )
 
+    val gradient = getCategoryGradient(categoryName)
+    
+    val categoryCopywriting = remember(categoryName) {
+        when (categoryName.lowercase().trim()) {
+            "sports", "live sports", "sports networks", "sport", "cricket", "football" -> 
+                "Experience the thrill of live stadium sports, tournaments, and athletic action in real-time."
+            "news" -> 
+                "Stay informed with trusted news broadcasters, breaking global updates, and on-the-scene reporters."
+            "entertainment", "show" -> 
+                "Immerse in nonstop visual entertainment, original series, popular networks, and daily shows."
+            "music" -> 
+                "Stream stunning high-fidelity music networks, live performances, and modern playlist tracks."
+            "movies", "premium movies", "drama", "cinema" -> 
+                "Binge full theatrical dramas, premium movies, cinematic releases, and classic features live."
+            "science", "documentary", "info" -> 
+                "Discover the wonders of our world, historical chronicles, and deep scientific broadcasts."
+            "kid", "kids", "cartoon", "animation", "child" -> 
+                "Safe, animated child-friendly networks, educational stories, and joyful family streams."
+            "religious", "islam", "prayer" -> 
+                "Engage in peaceful spiritual programs, direct prayer streams, and religious reflection."
+            else -> 
+                "Stream premium high-definition live channels directly. Smooth connections with no delay."
+        }
+    }
+
     Card(
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = cardBg),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        border = BorderStroke(1.dp, if (isScaleUp) Color(0xFFD0BCFF).copy(alpha = 0.3f) else Color.White.copy(alpha = 0.08f)),
         modifier = Modifier
             .fillMaxWidth()
-            .height(130.dp)
+            .height(145.dp)
             .graphicsLayer(scaleX = scale, scaleY = scale)
             .clickable(
                 interactionSource = interactionSource,
@@ -2823,58 +2918,96 @@ fun BentoCategoryInfoCard(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(brush = getCategoryGradient(categoryName), alpha = 0.8f)
+                .background(brush = gradient)
+                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.15f), Color.Black.copy(alpha = 0.85f))))
                 .padding(16.dp)
         ) {
             Icon(
                 imageVector = getCategoryIcon(categoryName),
                 contentDescription = null,
-                tint = Color.White.copy(alpha = 0.15f),
+                tint = Color.White.copy(alpha = 0.08f),
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(96.dp)
                     .align(Alignment.CenterEnd)
-                    .offset(x = 10.dp, y = 10.dp)
+                    .offset(x = 12.dp, y = 12.dp)
             )
 
             Column(
-                modifier = Modifier.fillMaxHeight(),
+                modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
-                        .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(50)),
-                    contentAlignment = Alignment.Center
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = getCategoryIcon(categoryName),
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = getCategoryIcon(categoryName),
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    
+                    Box(
+                        modifier = Modifier
+                            .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(Color(0xFFE53935), CircleShape)
+                            )
+                            Text(
+                                text = "ACTIVE HUB",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White,
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                    }
                 }
 
-                Column {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
                     Text(
-                        text = "EXPLORE",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.6f),
-                        letterSpacing = 1.sp
-                    )
-                    Text(
-                        text = categoryName,
-                        fontSize = 16.sp,
+                        text = categoryName.uppercase(),
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Black,
                         color = Color.White,
+                        letterSpacing = 0.5.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "$count Live Channels Available",
-                        fontSize = 10.sp,
-                        color = Color.White.copy(alpha = 0.8f)
+                        text = categoryCopywriting,
+                        fontSize = 10.5.sp,
+                        color = Color.LightGray.copy(alpha = 0.9f),
+                        lineHeight = 14.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "$count Live Feeds Live Now",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD0BCFF),
+                        letterSpacing = 0.2.sp
                     )
                 }
             }
@@ -2897,6 +3030,7 @@ fun BentoFeaturedChannelCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
     var isLongPressed by remember { mutableStateOf(false) }
 
     LaunchedEffect(interactionSource) {
@@ -2922,7 +3056,11 @@ fun BentoFeaturedChannelCard(
     val isPreviewPlaying = isHovered || isLongPressed
     val isScaleUp = isFocused || isHovered || isLongPressed
     val cardScale by animateFloatAsState(
-        targetValue = if (isScaleUp) 1.04f else 1.0f,
+        targetValue = when {
+            isPressed -> 0.96f
+            isScaleUp -> 1.04f
+            else -> 1.0f
+        },
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "featured_card_scale"
     )
@@ -2938,7 +3076,7 @@ fun BentoFeaturedChannelCard(
         border = BorderStroke(1.dp, cardBorderColor),
         modifier = Modifier
             .fillMaxWidth()
-            .height(130.dp)
+            .height(145.dp)
             .graphicsLayer(scaleX = cardScale, scaleY = cardScale)
             .clickable(
                 interactionSource = interactionSource,
@@ -2952,7 +3090,7 @@ fun BentoFeaturedChannelCard(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(brush = getCategoryGradient(categoryName), alpha = 0.25f)
+                    .background(brush = getCategoryGradient(categoryName), alpha = 0.15f)
             )
 
             val context = LocalContext.current
@@ -2994,13 +3132,13 @@ fun BentoFeaturedChannelCard(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(14.dp)
-                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                        .background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Box(
                             modifier = Modifier
@@ -3008,16 +3146,17 @@ fun BentoFeaturedChannelCard(
                                 .background(Color(0xFFE53935), CircleShape)
                         )
                         Text(
-                            text = "PREVIEW",
+                            text = "LIVE PREVIEW",
                             color = Color.White,
                             fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 0.5.sp
                         )
                         Icon(
                             imageVector = Icons.Default.VolumeOff,
                             contentDescription = "Muted",
                             tint = Color.White,
-                            modifier = Modifier.size(10.dp)
+                            modifier = Modifier.size(11.dp)
                         )
                     }
                 }
@@ -3028,8 +3167,12 @@ fun BentoFeaturedChannelCard(
                     .fillMaxSize()
                     .background(
                         Brush.horizontalGradient(
-                            colors = listOf(Color.Black.copy(alpha = 0.95f), Color.Black.copy(alpha = 0.2f)),
-                            endX = 500f
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.95f),
+                                Color.Black.copy(alpha = 0.7f),
+                                Color.Black.copy(alpha = 0.15f)
+                            ),
+                            endX = 650f
                         )
                     )
             )
@@ -3037,7 +3180,7 @@ fun BentoFeaturedChannelCard(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(14.dp),
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
@@ -3048,14 +3191,14 @@ fun BentoFeaturedChannelCard(
                     val hasBeenWatched = watchCount > 0
                     val reputationScore = com.example.data.ChannelClassifier.getChannelReputationScore(channel.name)
                     val labelText = when {
-                        hasBeenWatched -> "🔥 TRENDING ($watchCount PLAYS)"
-                        reputationScore >= 90 -> "🏆 TOP AUTHORIZED"
-                        else -> "⭐ EDITOR'S CHOICE"
+                        hasBeenWatched -> "🔥 TRENDING • $watchCount VIEWS"
+                        reputationScore >= 90 -> "🏆 CERTIFIED HIGH DEF"
+                        else -> "⭐ SPOTLIGHT CHOICE"
                     }
                     val labelBgColor = when {
-                        hasBeenWatched -> Color(0xFFFF5722) // Fire Orange
-                        reputationScore >= 90 -> Color(0xFFFFD700) // Gold
-                        else -> accentColor
+                        hasBeenWatched -> Color(0xFFFF5722).copy(alpha = 0.9f)
+                        reputationScore >= 90 -> Color(0xFFD4AF37).copy(alpha = 0.9f)
+                        else -> accentColor.copy(alpha = 0.9f)
                     }
                     val labelTextColor = when {
                         hasBeenWatched || reputationScore >= 90 -> Color.White
@@ -3064,8 +3207,8 @@ fun BentoFeaturedChannelCard(
 
                     Box(
                         modifier = Modifier
-                            .background(labelBgColor, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .background(labelBgColor, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
                             text = labelText,
@@ -3078,9 +3221,9 @@ fun BentoFeaturedChannelCard(
 
                     Box(
                         modifier = Modifier
-                            .size(28.dp)
-                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(50))
-                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                            .size(32.dp)
+                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                             .clickable { onToggleFavorite() },
                         contentAlignment = Alignment.Center
                     ) {
@@ -3093,43 +3236,47 @@ fun BentoFeaturedChannelCard(
                     }
                 }
 
-                Column(
-                    modifier = Modifier.fillMaxWidth(0.75f)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    Text(
-                        text = channel.name,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Black,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = channel.description.ifBlank { "Stream premium live feed now." },
-                        fontSize = 10.sp,
-                        color = Color.White.copy(alpha = 0.6f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
+                    Column(
+                        modifier = Modifier.weight(1f).padding(end = 12.dp)
+                    ) {
+                        Text(
+                            text = channel.name,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = channel.description.ifBlank { "Uncompromised premium stream with direct connection." },
+                            fontSize = 11.sp,
+                            color = Color.LightGray.copy(alpha = 0.8f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
 
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 16.dp)
-                    .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(50))
-                    .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(50)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = "Play",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
-                )
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(accentColor, CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Play stream",
+                            tint = Color.Black,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
             }
         }
     }
@@ -3149,6 +3296,7 @@ fun BentoCompactChannelCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
     var isLongPressed by remember { mutableStateOf(false) }
 
     LaunchedEffect(interactionSource) {
@@ -3174,7 +3322,11 @@ fun BentoCompactChannelCard(
     val isPreviewPlaying = isHovered || isLongPressed
     val isScaleUp = isFocused || isHovered || isLongPressed
     val cardScale by animateFloatAsState(
-        targetValue = if (isScaleUp) 1.05f else 1.0f,
+        targetValue = when {
+            isPressed -> 0.96f
+            isScaleUp -> 1.04f
+            else -> 1.0f
+        },
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "compact_card_scale"
     )
@@ -3185,12 +3337,12 @@ fun BentoCompactChannelCard(
     )
 
     Card(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = cardBg),
         border = BorderStroke(1.dp, cardBorderColor),
         modifier = Modifier
             .fillMaxWidth()
-            .height(130.dp)
+            .height(145.dp)
             .graphicsLayer(scaleX = cardScale, scaleY = cardScale)
             .clickable(
                 interactionSource = interactionSource,
@@ -3211,7 +3363,7 @@ fun BentoCompactChannelCard(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(brush = getCategoryGradient(categoryName), alpha = 0.15f)
+                        .background(brush = getCategoryGradient(categoryName), alpha = 0.12f)
                 )
 
                 val context = LocalContext.current
@@ -3229,17 +3381,25 @@ fun BentoCompactChannelCard(
                         .build()
                 }
 
-                SubcomposeAsyncImage(
-                    model = imageRequest,
-                    contentDescription = channel.name,
-                    contentScale = ContentScale.Fit,
+                Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(14.dp),
-                    loading = {
-                        ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
-                    }
-                )
+                        .align(Alignment.Center)
+                        .size(64.dp)
+                        .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(16.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
+                        .padding(8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    SubcomposeAsyncImage(
+                        model = imageRequest,
+                        contentDescription = channel.name,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                        loading = {
+                            ShimmerPlaceholder(modifier = Modifier.fillMaxSize())
+                        }
+                    )
+                }
 
                 val streamUrl = remember(channel) { channel.streams.firstOrNull()?.url ?: "" }
                 if (isPreviewPlaying && streamUrl.isNotEmpty()) {
@@ -3251,29 +3411,28 @@ fun BentoCompactChannelCard(
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Small overlay badge
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(6.dp)
-                            .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .padding(8.dp)
+                            .background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(6.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(4.dp)
+                                    .size(5.dp)
                                     .background(Color(0xFFE53935), CircleShape)
                             )
                             Icon(
                                 imageVector = Icons.Default.VolumeOff,
                                 contentDescription = "Muted Preview",
                                 tint = Color.White,
-                                modifier = Modifier.size(8.dp)
+                                modifier = Modifier.size(9.dp)
                             )
                         }
                     }
@@ -3282,7 +3441,7 @@ fun BentoCompactChannelCard(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(8.dp)
+                        .padding(10.dp)
                         .size(6.dp)
                         .background(Color(0xFFE53935), CircleShape)
                 )
@@ -3291,8 +3450,8 @@ fun BentoCompactChannelCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.3f))
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                    .background(Color.Black.copy(alpha = 0.25f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -3301,7 +3460,7 @@ fun BentoCompactChannelCard(
                 ) {
                     Text(
                         text = channel.name,
-                        fontSize = 11.5.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
                         maxLines = 1,
@@ -3311,18 +3470,21 @@ fun BentoCompactChannelCard(
                     if (watchCount > 0) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier
+                                .background(Color(0xFFFF5722).copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Whatshot,
+                                imageVector = Icons.Default.Star,
                                 contentDescription = "Trending",
                                 tint = Color(0xFFFF5722),
-                                modifier = Modifier.size(11.dp)
+                                modifier = Modifier.size(9.dp)
                             )
                             Text(
                                 text = "$watchCount",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Black,
                                 color = Color(0xFFFF5722)
                             )
                         }
@@ -3344,20 +3506,31 @@ fun BentoViewAllCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
     val isScaleUp = isFocused || isHovered
     val scale by animateFloatAsState(
-        targetValue = if (isScaleUp) 1.05f else 1.0f,
+        targetValue = when {
+            isPressed -> 0.96f
+            isScaleUp -> 1.04f
+            else -> 1.0f
+        },
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "bento_view_all_scale"
     )
+    
+    val arrowTranslation by animateFloatAsState(
+        targetValue = if (isScaleUp) 6f else 0f,
+        animationSpec = spring(stiffness = Spring.StiffnessMedium),
+        label = "view_all_arrow_anim"
+    )
 
     Card(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = cardBg.copy(alpha = 0.4f)),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+        border = BorderStroke(1.dp, if (isScaleUp) accentColor.copy(alpha = 0.3f) else Color.White.copy(alpha = 0.08f)),
         modifier = Modifier
             .fillMaxWidth()
-            .height(130.dp)
+            .height(145.dp)
             .graphicsLayer(scaleX = scale, scaleY = scale)
             .clickable(
                 interactionSource = interactionSource,
@@ -3369,41 +3542,56 @@ fun BentoViewAllCard(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(14.dp),
+                .padding(16.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
-                    .background(accentColor.copy(alpha = 0.12f), RoundedCornerShape(50))
-                    .border(1.dp, accentColor.copy(alpha = 0.3f), RoundedCornerShape(50)),
+                    .size(40.dp)
+                    .background(accentColor.copy(alpha = 0.12f), CircleShape)
+                    .border(1.dp, accentColor.copy(alpha = 0.3f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.ArrowBack,
                     contentDescription = null,
                     tint = accentColor,
-                    modifier = Modifier.size(16.dp).graphicsLayer(rotationZ = 180f)
+                    modifier = Modifier
+                        .size(16.dp)
+                        .graphicsLayer(
+                            rotationZ = 180f,
+                            translationX = arrowTranslation
+                        )
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "View All",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.ExtraBold,
+                text = "EXPLORE FULL",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
                 color = Color.White,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                letterSpacing = 1.sp,
+                textAlign = TextAlign.Center
             )
 
             Text(
-                text = "+${count - 4} Feeds",
+                text = "+${count - 4} CHANNELS",
                 fontSize = 10.sp,
                 color = accentColor,
-                fontWeight = FontWeight.Bold,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                fontWeight = FontWeight.ExtraBold,
+                textAlign = TextAlign.Center
+            )
+            
+            Spacer(modifier = Modifier.height(2.dp))
+            
+            Text(
+                text = "Tap to unlock archive",
+                fontSize = 9.sp,
+                color = Color.Gray,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -5917,10 +6105,15 @@ fun BentoTabItem(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
     val isScaled = isSelected || isFocused || isHovered
 
     val scale by animateFloatAsState(
-        targetValue = if (isScaled) 1.05f else 1.0f,
+        targetValue = when {
+            isPressed -> 0.96f
+            isScaled -> 1.05f
+            else -> 1.0f
+        },
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "bento_tab_scale"
     )
@@ -5994,5 +6187,335 @@ fun BentoTabItem(
         }
     }
 }
+
+@Composable
+fun CategoryFilterChip(
+    selected: Boolean,
+    label: String,
+    icon: ImageVector,
+    count: Int,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val isScaled = selected || isFocused || isHovered
+
+    val scale by animateFloatAsState(
+        targetValue = when {
+            isPressed -> 0.96f
+            isScaled -> 1.05f
+            else -> 1.0f
+        },
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "chip_scale"
+    )
+
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) Color.Black else Color.White,
+        animationSpec = tween(durationMillis = 200),
+        label = "chip_content_color"
+    )
+
+    val containerColor by animateColorAsState(
+        targetValue = if (selected) Color(0xFFEADDFF) else Color(0xFF2A2438),
+        animationSpec = tween(durationMillis = 200),
+        label = "chip_bg"
+    )
+
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) Color(0xFFEADDFF).copy(alpha = 0.5f) else Color.White.copy(alpha = 0.08f),
+        animationSpec = tween(durationMillis = 200),
+        label = "chip_border"
+    )
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        border = BorderStroke(1.dp, borderColor),
+        modifier = Modifier
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = contentColor,
+                modifier = Modifier.size(15.dp)
+            )
+
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold,
+                color = contentColor
+            )
+
+            Box(
+                modifier = Modifier
+                    .background(
+                        if (selected) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.08f),
+                        CircleShape
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "$count",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                    color = if (selected) Color.Black else Color.LightGray
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PremiumHeroBanner(
+    channel: com.example.data.GroupedChannel,
+    categoryName: String,
+    currentProgram: com.example.data.EpgProgramEntity?,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    cardBg: Color,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val isHovered by interactionSource.collectIsHoveredAsState()
+    val isScaled = isFocused || isHovered
+
+    val scale by animateFloatAsState(
+        targetValue = if (isScaled) 1.02f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "hero_scale"
+    )
+
+    val gradient = remember(categoryName) {
+        getCategoryGradient(categoryName)
+    }
+
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick
+            )
+            .focusable(interactionSource = interactionSource)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(gradient)
+                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.2f), Color.Black.copy(alpha = 0.85f))))
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Badge
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(50))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = null,
+                            tint = Color(0xFFFFD700),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Text(
+                            text = "SPOTLIGHT RECOMMENDATION",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White,
+                            letterSpacing = 1.sp
+                        )
+                    }
+
+                    // Channel Name / Program Title
+                    Text(
+                        text = channel.name,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    // Current playing info
+                    if (currentProgram != null) {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                .padding(10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = "Playing Now",
+                                    tint = accentColor,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "LIVE NOW",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = accentColor,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                            Text(
+                                text = currentProgram.title,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                              )
+                              if (currentProgram.description.isNotBlank()) {
+                                Text(
+                                    text = currentProgram.description,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = Color.LightGray,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    } else if (channel.description.isNotBlank()) {
+                        Text(
+                            text = channel.description,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = Color.LightGray.copy(alpha = 0.9f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else {
+                        Text(
+                            text = "Stream high-quality live broadcast of $categoryName channels directly. Crystal-clear connection.",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = Color.LightGray.copy(alpha = 0.9f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Buttons row
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = onClick,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier.height(36.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Watch Live",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.Black
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = onToggleFavorite,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = "Favorite",
+                                tint = if (channel.isFavorite) Color(0xFFFF5252) else Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                // Channel Logo / Large Icon on the right
+                Box(
+                    modifier = Modifier
+                        .size(90.dp)
+                        .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(20.dp))
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (channel.logoUrl.isNotBlank()) {
+                        coil.compose.SubcomposeAsyncImage(
+                            model = channel.logoUrl,
+                            contentDescription = "${channel.name} Logo",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                    } else {
+                        Icon(
+                            imageVector = getCategoryIcon(categoryName),
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 

@@ -1499,11 +1499,258 @@ fun DebugConsoleView(
     val verificationCount = logs.count { it.type.equals("Verification", ignoreCase = true) }
     val fetchCount = logs.count { it.type.equals("Playlist Fetch", ignoreCase = true) }
 
+    // Security & Key Rotation States
+    val secondaryAccentColor = Color(0xFFEADDFF)
+    var rotationEndpoint by remember { mutableStateOf("https://ais-dev-d3dsoshc3zvafncm5btc3t-355699576246.asia-southeast1.run.app/api/v1/decryption-key") }
+    var rotationResultMsg by remember { mutableStateOf("") }
+    var activeKeyPreview by remember { mutableStateOf("Default / Static Env Key") }
+    var isRotating by remember { mutableStateOf(false) }
+    var showSecurityControls by remember { mutableStateOf(true) }
+    val handler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    fun refreshKeyPreview() {
+        val testString = "https://example.com/stream.m3u8"
+        val encrypted = com.example.data.StreamDecryptionUtility.encrypt(testString, context)
+        val decrypted = com.example.data.StreamDecryptionUtility.decrypt(encrypted, context)
+        if (decrypted == testString) {
+            val keyStr = com.example.data.StreamDecryptionUtility.encrypt("test", context).replace("encrypted://", "")
+            activeKeyPreview = if (keyStr.length > 12) keyStr.take(12) + "..." else keyStr
+        } else {
+            activeKeyPreview = "Uninitialized / Mismatch"
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshKeyPreview()
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(16.dp)
+            .verticalScroll(rememberScrollState())
     ) {
+        // Expandable Security Controls Panel
+        Card(
+            colors = CardDefaults.cardColors(containerColor = cardBg),
+            border = BorderStroke(1.dp, accentColor.copy(alpha = 0.3f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showSecurityControls = !showSecurityControls },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = "Security",
+                            tint = accentColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Security & Dynamic Key Rotation",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = Color.White
+                        )
+                    }
+                    Icon(
+                        imageVector = if (showSecurityControls) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Toggle",
+                        tint = Color.Gray,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                if (showSecurityControls) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Divider(color = Color.White.copy(alpha = 0.08f))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // 1. Key Rotation Section
+                    Text(
+                        text = "Dynamic Key Rotation",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = accentColor
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    OutlinedTextField(
+                        value = rotationEndpoint,
+                        onValueChange = { rotationEndpoint = it },
+                        label = { Text("Secure Key Endpoint URL", color = Color.Gray, fontSize = 11.sp) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = accentColor,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                isRotating = true
+                                rotationResultMsg = "Connecting to backend..."
+                                com.example.data.StreamDecryptionUtility.fetchAndRotateKey(context, rotationEndpoint.trim()) { success, msg ->
+                                    isRotating = false
+                                    if (success) {
+                                        rotationResultMsg = "Dynamic Key Rotation Succeeded!"
+                                        refreshKeyPreview()
+                                    } else {
+                                        rotationResultMsg = "Error: $msg"
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = accentColor,
+                                contentColor = onPurpleColor
+                            ),
+                            enabled = !isRotating,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("REST Rotation", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = {
+                                com.example.data.StreamDecryptionUtility.rotateKeyLocally(context)
+                                rotationResultMsg = "Offline rotation successful! New secure key applied."
+                                refreshKeyPreview()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = secondaryAccentColor,
+                                contentColor = onPurpleColor
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Offline Rotation", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    if (rotationResultMsg.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = rotationResultMsg,
+                            color = if (rotationResultMsg.contains("Error")) Color(0xFFF2B8B5) else Color(0xFF81C784),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Active Key Fingerprint:", color = Color.Gray, fontSize = 11.sp)
+                        Text(
+                            text = activeKeyPreview,
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Divider(color = Color.White.copy(alpha = 0.08f))
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // 2. Anti-Reverse Engineering & Root Protection Section
+                    Text(
+                        text = "Anti-Reverse Engineering & Root Protection",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = accentColor
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        val isRootDetected = com.example.data.AppIntegrityChecker.verifyIntegrity(context, forceKill = false).not()
+                        val isDebuggerActive = android.os.Debug.isDebuggerConnected() || android.os.Debug.waitingForDebugger()
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Root Check:", color = Color.Gray, fontSize = 11.sp)
+                            Text(
+                                text = if (isRootDetected) "ROOT DETECTED" else "SECURE (No su)",
+                                color = if (isRootDetected) Color(0xFFF2B8B5) else Color(0xFF81C784),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Debugger:", color = Color.Gray, fontSize = 11.sp)
+                            Text(
+                                text = if (isDebuggerActive) "ACTIVE (Attached)" else "SECURE (Offline)",
+                                color = if (isDebuggerActive) Color(0xFFF2B8B5) else Color(0xFF81C784),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                val valid = com.example.data.AppIntegrityChecker.verifyIntegrity(context, forceKill = false)
+                                if (valid) {
+                                    android.widget.Toast.makeText(context, "System integrity scan passed! Device is secure.", android.widget.Toast.LENGTH_SHORT).show()
+                                } else {
+                                    android.widget.Toast.makeText(context, "INTEGRITY WARNING: Potential threats detected!", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = cardBg),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Scan Device", fontSize = 11.sp, color = Color.White)
+                        }
+
+                        Button(
+                            onClick = {
+                                android.widget.Toast.makeText(context, "Simulating violation... Terminating app session now.", android.widget.Toast.LENGTH_LONG).show()
+                                handler.postDelayed({
+                                    com.example.data.AppIntegrityChecker.terminateSession()
+                                }, 1000)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBA1A1A)),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Simulate Kill", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),

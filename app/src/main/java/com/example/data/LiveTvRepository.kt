@@ -150,6 +150,22 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
         return dao.getCurrentProgramForChannel(searchIds, System.currentTimeMillis())
     }
 
+    private fun encryptChannelUrls(channel: ChannelEntity): ChannelEntity {
+        val encStreamUrl = if (!channel.streamUrl.startsWith("encrypted://")) {
+            StreamDecryptionUtility.encrypt(channel.streamUrl)
+        } else {
+            channel.streamUrl
+        }
+        val encSources = channel.playbackSources.map { src ->
+            if (!src.url.startsWith("encrypted://")) {
+                src.copy(url = StreamDecryptionUtility.encrypt(src.url))
+            } else {
+                src
+            }
+        }
+        return channel.copy(streamUrl = encStreamUrl, playbackSources = encSources)
+    }
+
     suspend fun insertChannel(channel: ChannelEntity): Long {
         val resolved = if (channel.category.isEmpty() && channel.categoryId != 0) {
             val cat = dao.getCategoryById(channel.categoryId)
@@ -157,7 +173,7 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
         } else {
             channel
         }
-        return dao.insertChannel(resolved)
+        return dao.insertChannel(encryptChannelUrls(resolved))
     }
 
     suspend fun updateChannel(channel: ChannelEntity) {
@@ -167,7 +183,7 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
         } else {
             channel
         }
-        dao.updateChannel(resolved)
+        dao.updateChannel(encryptChannelUrls(resolved))
     }
 
     suspend fun deleteChannel(channel: ChannelEntity) {
@@ -216,15 +232,17 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                 }
 
                 channelsToInsert.add(
-                    ChannelEntity(
-                        name = parsed.name,
-                        streamUrl = parsed.streamUrl,
-                        logoUrl = parsed.logoUrl,
-                        category = detectedGroup,
-                        categoryId = catId,
-                        description = parsed.description,
-                        tvgId = parsed.tvgId,
-                        tvgName = parsed.tvgName
+                    encryptChannelUrls(
+                        ChannelEntity(
+                            name = parsed.name,
+                            streamUrl = parsed.streamUrl,
+                            logoUrl = parsed.logoUrl,
+                            category = detectedGroup,
+                            categoryId = catId,
+                            description = parsed.description,
+                            tvgId = parsed.tvgId,
+                            tvgName = parsed.tvgName
+                        )
                     )
                 )
 
@@ -700,7 +718,11 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                 }
 
                 val body = response.body ?: return@use false
-                val parsedList = body.charStream().use { reader ->
+                // Securely save downloaded raw content using memory-only cache & protected local encrypted directory
+                val rawText = body.string()
+                M3uParserService.savePlaylistSecurely(context, urlStr, rawText)
+                
+                val parsedList = java.io.StringReader(rawText).use { reader ->
                     M3uParserService.parseM3uReader(reader)
                 }
                 val extractedEpgUrl = M3uParserService.lastTvgUrl
@@ -766,16 +788,18 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                     }
 
                     channelsToInsert.add(
-                        ChannelEntity(
-                            name = raw.name,
-                            streamUrl = raw.streamUrl,
-                            logoUrl = raw.logoUrl.ifEmpty { "https://images.unsplash.com/photo-1542038784456-1ea8e935640e?w=120&q=80" },
-                            categoryId = catId,
-                            category = categoryName,
-                            description = raw.description,
-                            tvgId = raw.tvgId,
-                            tvgName = raw.tvgName,
-                            playlistUrl = playlistUrl
+                        encryptChannelUrls(
+                            ChannelEntity(
+                                name = raw.name,
+                                streamUrl = raw.streamUrl,
+                                logoUrl = raw.logoUrl.ifEmpty { "https://images.unsplash.com/photo-1542038784456-1ea8e935640e?w=120&q=80" },
+                                categoryId = catId,
+                                category = categoryName,
+                                description = raw.description,
+                                tvgId = raw.tvgId,
+                                tvgName = raw.tvgName,
+                                playlistUrl = playlistUrl
+                            )
                         )
                     )
                 }
@@ -1055,7 +1079,8 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                 musicId to "Music"
             )
             val channelsWithCategories = curatedChannels.map { channel ->
-                channel.copy(category = categoryNamesMap[channel.categoryId] ?: "")
+                val channelWithCat = channel.copy(category = categoryNamesMap[channel.categoryId] ?: "")
+                encryptChannelUrls(channelWithCat)
             }
             dao.insertChannels(channelsWithCategories)
         }
