@@ -18,6 +18,10 @@ interface LiveTvDao {
     @Query("SELECT * FROM categories WHERE id = :id LIMIT 1")
     suspend fun getCategoryById(id: Int): CategoryEntity?
 
+    /** Look up a category by its exact name — used to avoid duplicate inserts. */
+    @Query("SELECT * FROM categories WHERE name = :name LIMIT 1")
+    suspend fun getCategoryByName(name: String): CategoryEntity?
+
     @Delete
     suspend fun deleteCategory(category: CategoryEntity)
 
@@ -55,6 +59,9 @@ interface LiveTvDao {
     @Query("DELETE FROM categories")
     suspend fun deleteAllCategories()
 
+    @Query("DELETE FROM channels WHERE playlistUrl = :playlistUrl")
+    suspend fun deleteChannelsByPlaylistUrl(playlistUrl: String)
+
     @Delete
     suspend fun deleteChannel(channel: ChannelEntity)
 
@@ -72,6 +79,23 @@ interface LiveTvDao {
 
     @Query("UPDATE channels SET isBroken = :isBroken, lastChecked = :lastChecked WHERE id = :channelId")
     suspend fun updateChannelBrokenStatus(channelId: Int, isBroken: Boolean, lastChecked: Long)
+
+    /**
+     * Returns all channels currently marked as broken — used by the Worker-assisted
+     * batch re-verification flow so we only re-check channels the Worker flagged as
+     * dead, rather than scanning the entire library.
+     */
+    @Query("SELECT * FROM channels WHERE isBroken = 1 ORDER BY lastChecked ASC")
+    suspend fun getBrokenChannels(): List<ChannelEntity>
+
+    /**
+     * Applies the Cloudflare Worker's authoritative validation result.
+     * Sets isBroken + channelHealth atomically. lastChecked = now so the
+     * 4-hour skip window kicks in and prevents immediate re-scan.
+     */
+    @Query("UPDATE channels SET isBroken = :isBroken, channelHealth = :health, lastChecked = :lastChecked WHERE id = :channelId")
+    suspend fun updateChannelWorkerValidation(channelId: Int, isBroken: Boolean, health: String, lastChecked: Long)
+
 
     @Query("UPDATE channels SET isBroken = :isBroken, lastChecked = :lastChecked WHERE id IN (:channelIds)")
     suspend fun updateChannelsBrokenStatusQuery(channelIds: List<Int>, isBroken: Boolean, lastChecked: Long)

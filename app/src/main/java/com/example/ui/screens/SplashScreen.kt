@@ -169,7 +169,8 @@ fun SplashScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier
-                .padding(32.dp)
+                .widthIn(max = 480.dp)
+                .padding(horizontal = 32.dp, vertical = 24.dp)
                 .graphicsLayer {
                     alpha = alphaAnim
                     scaleX = scaleAnim

@@ -22,30 +22,7 @@ import androidx.room.withTransaction
 class LiveTvRepository(private val dao: LiveTvDao, private val context: android.content.Context) {
     private val okHttpClient = com.example.data.CachedHttpClient.getClient(context)
 
-    companion object {
-        val CATEGORIZED_M3U_MAP = mapOf(
-            "BDIX IPTV" to "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u",
-            "Animation" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/animation.m3u",
-            "Auto" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/auto.m3u",
-            "Bangla Channel" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/bangla-channel.m3u",
-            "Bangla News" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/bangla_news.m3u",
-            "Business" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/business.m3u",
-            "Comedy" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/comedy.m3u",
-            "Cricket" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/cricket.m3u",
-            "Documentary" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/documentary.m3u",
-            "Entertainment" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/entertainment.m3u",
-            "International News" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/international_news.m3u",
-            "Kids" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/kids.m3u",
-            "Lifestyle" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/lifestyle.m3u",
-            "Movies" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/movies.m3u",
-            "Music" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/music.m3u",
-            "Religious" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/religious.m3u",
-            "Sports & Football" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/sports_football.m3u",
-            "Live Events" to "https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/live-event.m3u",
-            "Doms9 Base" to "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/base.m3u8",
-            "Doms9 US TV" to "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8"
-        )
-    }
+
 
     val distinctActiveCategories: Flow<List<String>> = dao.getDistinctActiveCategories()
     val allCategories: Flow<List<CategoryEntity>> = dao.getAllCategories()
@@ -152,13 +129,13 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
 
     private fun encryptChannelUrls(channel: ChannelEntity): ChannelEntity {
         val encStreamUrl = if (!channel.streamUrl.startsWith("encrypted://")) {
-            StreamDecryptionUtility.encrypt(channel.streamUrl)
+            StreamDecryptionUtility.encrypt(channel.streamUrl, context)
         } else {
             channel.streamUrl
         }
         val encSources = channel.playbackSources.map { src ->
             if (!src.url.startsWith("encrypted://")) {
-                src.copy(url = StreamDecryptionUtility.encrypt(src.url))
+                src.copy(url = StreamDecryptionUtility.encrypt(src.url, context))
             } else {
                 src
             }
@@ -200,6 +177,25 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
 
     suspend fun updateChannelsBrokenStatuses(brokenIds: List<Int>, workingIds: List<Int>, lastChecked: Long = System.currentTimeMillis()) {
         dao.updateChannelsBrokenStatuses(brokenIds, workingIds, lastChecked)
+    }
+
+    /**
+     * Returns all channels currently flagged as broken in the local DB.
+     * Used by [BackgroundSyncManager.verifyBrokenChannelsViaWorker] to build
+     * the batch re-validation request to the Cloudflare Worker.
+     */
+    suspend fun getBrokenChannels(): List<ChannelEntity> = withContext(Dispatchers.IO) {
+        dao.getBrokenChannels()
+    }
+
+    /**
+     * Commits the Cloudflare Worker's authoritative validation result for a
+     * single channel. Sets isBroken + channelHealth in one atomic query and
+     * stamps lastChecked = now so the 4-hour skip window prevents re-scanning.
+     */
+    suspend fun applyWorkerValidationResult(channelId: Int, isWorking: Boolean) = withContext(Dispatchers.IO) {
+        val health = if (isWorking) "Excellent" else "Offline"
+        dao.updateChannelWorkerValidation(channelId, !isWorking, health, System.currentTimeMillis())
     }
 
     suspend fun parseAndInsertM3uText(m3uText: String) = withContext(Dispatchers.IO) {
@@ -287,6 +283,9 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
 
         val db = AppDatabase.getDatabase(context)
         db.withTransaction {
+            // Delete fallback seeded channels first to avoid duplicates
+            dao.deleteChannelsByPlaylistUrl("fallback_seed")
+
             // Get all current categories to look up their names
             val categoryMap = dao.getAllCategoriesList().associate { it.id to it.name }
 
@@ -445,86 +444,264 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
         }
     }
 
-    suspend fun fetchAndParseServerDrivenJson(url: String, force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
-        val requestBuilder = Request.Builder().url(url)
-        
-        if (!force) {
-            val cachedMeta = dao.getM3uMeta(url)
-            if (cachedMeta != null) {
-                if (!cachedMeta.eTag.isNullOrBlank()) {
-                    requestBuilder.header("If-None-Match", cachedMeta.eTag)
-                }
-                if (!cachedMeta.lastModified.isNullOrBlank()) {
-                    requestBuilder.header("If-Modified-Since", cachedMeta.lastModified)
-                }
-            }
+    /**
+     * Fetch the compiled channel JSON from the Cloudflare Worker and apply a delta-import:
+     * - NEW channels (not in DB by normalized name) → insert with lastChecked=0 (immediate validation)
+     * - UPDATED channels (same name, different stream URLs) → update streams, reset lastChecked=0
+     * - UNCHANGED channels (same name, same streams) → SKIP — preserve existing isBroken + lastChecked
+     * - REMOVED channels (in DB but not in worker response) → mark broken first, delete after re-check
+     *
+     * Returns a Pair(updated: Boolean, newChannelIds: List<Int>) so the caller can
+     * trigger fast-path validation only for new/updated channels.
+     */
+    suspend fun fetchAndParseServerDrivenJson(
+        url: String,
+        force: Boolean = false
+    ): Pair<Boolean, List<Int>> = withContext(Dispatchers.IO) {
+        // ─── Build the request URL ─────────────────────────────────────────────
+        // Append ?since=<lastChangeAt> so the Worker can return { changed: false }
+        // without transmitting the full payload when nothing has changed.
+        // This is the primary bandwidth and startup-time optimization.
+        val cachedMeta = dao.getM3uMeta(url)
+        val lastChangeAt = cachedMeta?.lastChangeAt ?: 0L
+
+        val requestUrl = if (!force && lastChangeAt > 0L) {
+            // Use ?since= fast path — Worker returns {changed:false} if unchanged
+            val separator = if (url.contains("?")) "&" else "?"
+            "$url${separator}since=$lastChangeAt"
+        } else {
+            url
         }
-        
-        val request = requestBuilder.build()
+        val requestBuilder = Request.Builder().url(requestUrl)
+        if (!force && cachedMeta != null) {
+            if (!cachedMeta.eTag.isNullOrBlank()) requestBuilder.header("If-None-Match", cachedMeta.eTag)
+            if (!cachedMeta.lastModified.isNullOrBlank()) requestBuilder.header("If-Modified-Since", cachedMeta.lastModified)
+        }
         try {
-            okHttpClient.newCall(request).execute().use { response ->
+            okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
                 val responseCode = response.code
                 if (responseCode == 304) {
-                    Log.i("LiveTvRepository", "HTTP 304 Not Modified for Server JSON: $url. Trusting local database cache.")
-                    return@withContext false
+                    Log.i("LiveTvRepository", "HTTP 304 — channel list unchanged.")
+                    return@withContext Pair(false, emptyList())
                 }
-                
                 if (!response.isSuccessful) {
                     Log.e("LiveTvRepository", "Failed to fetch server JSON: HTTP $responseCode")
-                    return@withContext false
+                    return@withContext Pair(false, emptyList())
                 }
-                
-                val bodyText = response.body?.string() ?: return@withContext false
-                
-                val moshi = Moshi.Builder()
-                    .addLast(KotlinJsonAdapterFactory())
-                    .build()
-                val adapter = moshi.adapter(UnifiedChannelsResponse::class.java)
-                val responseObj = adapter.fromJson(bodyText) ?: return@withContext false
-                
-                val categoriesToInsert = responseObj.categories.map { cat ->
-                    CategoryEntity(id = cat.id, name = cat.name)
+
+                val bodyText = response.body?.string() ?: return@withContext Pair(false, emptyList())
+                val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+                val responseObj = moshi.adapter(UnifiedChannelsResponse::class.java).fromJson(bodyText)
+                    ?: return@withContext Pair(false, emptyList())
+
+                // ─── Fast path: Worker says nothing changed ────────────────────────
+                if (!responseObj.changed) {
+                    Log.i("LiveTvRepository", "Worker reported changed=false (since=$lastChangeAt) — skipping import.")
+                    return@withContext Pair(false, emptyList())
                 }
-                
-                val channelsToInsert = responseObj.channels.map { ch ->
-                    val streams = ch.streams.map { s ->
+
+                // ─── Classify incoming channels ──────────────────────────────────────
+                // The Worker already classified channels, but we run the local classifier
+                // as a fallback in case the Worker's category doesn't match a local category ID.
+                val localClassified = withContext(Dispatchers.Default) {
+                    responseObj.channels.map { ch ->
+                        ch to ChannelClassifier.classify(ch.name, ch.category).trim()
+                    }
+                }
+
+                // Delete fallback seeded channels first to avoid duplicates
+                dao.deleteChannelsByPlaylistUrl("fallback_seed")
+
+                // ─── Load existing DB channels keyed by normalized name ─────────────
+                val existingChannels = dao.getAllChannelsList()
+                val existingByName = existingChannels.associateBy { normalizeChannelName(it.name) }
+
+                // ─── Ensure all categories exist in DB (dedup-safe) ───────────────────
+                // IMPORTANT: Do NOT blindly call dao.insertCategory() for every incoming
+                // category name. CategoryEntity uses autoGenerate=true so a naive INSERT
+                // always creates a new row with a NEW id, causing duplicates in the UI.
+                // Instead: load all existing categories by name first, then only INSERT
+                // the ones that are genuinely new. Reuse the existing id for known ones.
+                val incomingCategoryNames = localClassified.map { it.second }.distinct().sorted()
+
+                // Load ALL existing categories into a name→id map (single DB read)
+                val existingCategoryMap = dao.getAllCategoriesList()
+                    .associate { it.name to it.id }
+                    .toMutableMap()
+
+                val categoryIdMap = mutableMapOf<String, Int>()
+
+                for (name in incomingCategoryNames) {
+                    val existingId = existingCategoryMap[name]
+                    if (existingId != null) {
+                        // Already in DB — reuse the existing id, do NOT re-insert
+                        categoryIdMap[name] = existingId
+                    } else {
+                        // Genuinely new category — insert and capture the new id
+                        val newId = dao.insertCategory(CategoryEntity(name = name)).toInt()
+                        categoryIdMap[name] = newId
+                        existingCategoryMap[name] = newId // update local cache
+                    }
+                }
+
+                // ─── Delta classification ────────────────────────────────────
+                val toInsert = mutableListOf<ChannelEntity>()
+                val toUpdate = mutableListOf<ChannelEntity>()
+                val incomingNames = mutableSetOf<String>()
+
+                for ((ch, categoryName) in localClassified) {
+                    val nameKey = normalizeChannelName(ch.name)
+                    incomingNames.add(nameKey)
+
+                    // Trust the Worker's isBroken verdict for each stream.
+                    // The Worker has already done a 3-phase HEAD+GET validation
+                    // so we don't need to reset isBroken=false and schedule a local re-check.
+                    val incoming_streams = ch.streams.map { s ->
                         PlaybackSource(url = s.url, name = s.name, isBroken = s.isBroken)
                     }
-                    ChannelEntity(
-                        name = ch.name,
-                        streamUrl = ch.streams.firstOrNull()?.url ?: "",
-                        logoUrl = ch.logoUrl ?: "",
-                        categoryId = ch.categoryId,
-                        category = ch.category,
-                        description = ch.description ?: "",
-                        tvgId = ch.tvgId ?: "",
-                        tvgName = ch.tvgName ?: "",
-                        playbackSources = streams,
-                        playlistUrl = url,
-                        lastChecked = System.currentTimeMillis()
-                    )
+                    val catId = categoryIdMap[categoryName] ?: 0
+
+                    // Worker-level broken state: if ALL incoming streams are broken, mark channel broken
+                    val workerSaysAllBroken = incoming_streams.isNotEmpty() && incoming_streams.all { it.isBroken }
+                    // If at least one stream is alive according to the Worker → channel is working
+                    val workerValidatedAt = System.currentTimeMillis()
+
+                    val existing = existingByName[nameKey]
+                    if (existing == null) {
+                        // ── NEW channel ──
+                        // Worker already validated the streams, so set lastChecked=now if Worker
+                        // confirmed them, OR lastChecked=0 if Worker couldn't check (not_checked).
+                        val workerChecked = ch.streams.any { it.validationReason != "not_checked" }
+                        val raw = ChannelEntity(
+                            name = ch.name,
+                            streamUrl = ch.streams.firstOrNull()?.url ?: "",
+                            logoUrl = ch.logoUrl ?: "",
+                            categoryId = catId,
+                            category = categoryName,
+                            description = ch.description ?: "",
+                            tvgId = ch.tvgId ?: "",
+                            tvgName = ch.tvgName ?: "",
+                            playbackSources = incoming_streams,
+                            playlistUrl = url,
+                            isBroken = workerSaysAllBroken,
+                            channelHealth = if (workerChecked) { if (workerSaysAllBroken) "Offline" else "Excellent" } else "Unknown",
+                            // If Worker validated → stamp lastChecked=now so 4h skip window applies.
+                            // If Worker didn't check (not_checked) → 0L so local validator picks it up.
+                            lastChecked = if (workerChecked) workerValidatedAt else 0L
+                        )
+                        toInsert.add(encryptChannelUrls(raw))
+                    } else {
+                        // ── EXISTING channel: check if streams changed ──
+                        val incomingUrlSet = ch.streams.map { it.url }.toSet()
+                        val existingUrlSet = existing.playbackSources.map { it.url }.toSet()
+                        val streamsChanged = incomingUrlSet != existingUrlSet
+
+                        // Check if Worker's isBroken verdict differs from what's stored locally
+                        val workerBrokenDiffers = existing.isBroken != workerSaysAllBroken
+
+                        if (streamsChanged) {
+                            // Streams changed — update, respect Worker's new verdict
+                            val workerChecked = ch.streams.any { it.validationReason != "not_checked" }
+                            val updated = existing.copy(
+                                streamUrl = ch.streams.firstOrNull()?.url ?: existing.streamUrl,
+                                logoUrl = ch.logoUrl?.takeIf { it.isNotBlank() } ?: existing.logoUrl,
+                                categoryId = catId,
+                                category = categoryName,
+                                playbackSources = incoming_streams,
+                                isBroken = workerSaysAllBroken,
+                                channelHealth = if (workerChecked) { if (workerSaysAllBroken) "Offline" else "Excellent" } else existing.channelHealth,
+                                lastChecked = if (workerChecked) workerValidatedAt else 0L
+                            )
+                            toUpdate.add(encryptChannelUrls(updated))
+                        } else if (workerBrokenDiffers) {
+                            // Streams identical but Worker's isBroken verdict is different (e.g., stream
+                            // was dead but now recovered, or newly died) → sync Worker's verdict to DB.
+                            val workerChecked = ch.streams.any { it.validationReason != "not_checked" }
+                            if (workerChecked) {
+                                val updated = existing.copy(
+                                    isBroken = workerSaysAllBroken,
+                                    channelHealth = if (workerSaysAllBroken) "Offline" else "Excellent",
+                                    lastChecked = workerValidatedAt
+                                )
+                                toUpdate.add(updated) // No URL change — no need to re-encrypt
+                            }
+                        }
+                        // If streams unchanged AND isBroken matches Worker → SKIP (preserve existing state)
+                    }
                 }
-                
-                dao.clearAndInsertUnifiedChannels(categoriesToInsert, channelsToInsert)
-                
+
+                // ─── Handle removed channels (in DB but not in worker response) ───
+                // Mark them isBroken=true; background verifier will confirm then prune them
+                val removedChannels = existingChannels.filter {
+                    normalizeChannelName(it.name) !in incomingNames && it.playlistUrl == url
+                }
+                for (removed in removedChannels) {
+                    dao.updateChannelBrokenStatus(removed.id, true, System.currentTimeMillis())
+                }
+
+                // ─── Commit inserts + updates ─────────────────────────────────
+                if (toInsert.isNotEmpty()) dao.insertChannels(toInsert)
+                if (toUpdate.isNotEmpty()) dao.updateChannels(toUpdate)
+
+                // Clean up any empty categories
+                val remainingChannels = dao.getAllChannelsList()
+                val activeCategoryIds = remainingChannels.map { it.categoryId }.toSet()
+                val allCategories = dao.getAllCategoriesList()
+                val emptyCategories = allCategories.filter { it.id !in activeCategoryIds }
+                if (emptyCategories.isNotEmpty()) {
+                    emptyCategories.forEach { cat ->
+                        dao.deleteCategory(cat)
+                    }
+                }
+
+                // Collect IDs of new/updated channels for priority fast-path validation
+                val newChannelIds = mutableListOf<Int>()
+                if (toInsert.isNotEmpty() || toUpdate.isNotEmpty()) {
+                    // Re-query by name to get their DB-assigned IDs
+                    val refreshedChannels = dao.getAllChannelsList()
+                    val priorityNames = (toInsert + toUpdate).map { normalizeChannelName(it.name) }.toSet()
+                    refreshedChannels
+                        .filter { normalizeChannelName(it.name) in priorityNames }
+                        .mapTo(newChannelIds) { it.id }
+                }
+
                 val newEtag = response.header("ETag")
                 val newLastModified = response.header("Last-Modified")
-                dao.insertM3uMeta(M3uMetaEntity(url = url, eTag = newEtag, lastModified = newLastModified))
-                
-                Log.i("LiveTvRepository", "Successfully synced and imported ${responseObj.channels.size} server-driven channels.")
-                return@withContext true
+                // Persist the Worker's lastChangeAt so ?since= works on the next launch
+                dao.insertM3uMeta(M3uMetaEntity(
+                    url = url,
+                    eTag = newEtag,
+                    lastModified = newLastModified,
+                    lastChangeAt = responseObj.lastChangeAt.takeIf { it > 0L }
+                        ?: responseObj.updatedAt
+                ))
+
+                Log.i("LiveTvRepository",
+                    "Delta sync: +${toInsert.size} new, ~${toUpdate.size} updated, " +
+                    "-${removedChannels.size} removed. ${existingChannels.size - removedChannels.size} unchanged (preserved).")
+
+                val anyChange = toInsert.isNotEmpty() || toUpdate.isNotEmpty() || removedChannels.isNotEmpty()
+                return@withContext Pair(anyChange, newChannelIds)
             }
         } catch (e: Exception) {
-            Log.e("LiveTvRepository", "Error fetching/parsing server JSON from $url", e)
-            return@withContext false
+            Log.e("LiveTvRepository", "Error in delta sync from $url", e)
+            return@withContext Pair(false, emptyList())
         }
     }
 
-    suspend fun fetchAndParseM3u(m3uUrl: String = "https://iptv-org.github.io/iptv/index.m3u", force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+    /** Normalize channel name for delta comparison: lowercase, trim, collapse spaces. */
+    fun normalizeChannelName(name: String): String =
+        name.trim().lowercase().replace(Regex("\\s+"), " ")
+
+
+    suspend fun fetchAndParseM3u(m3uUrl: String = "https://iptv-api-worker.shakilemon71.workers.dev/api/channels", force: Boolean = false): Pair<Boolean, List<Int>> = withContext(Dispatchers.IO) {
         val trimmedUrl = m3uUrl.trim()
-        if (trimmedUrl.endsWith(".json", ignoreCase = true) || trimmedUrl.contains("/channels.json")) {
-            val jsonSuccess = fetchAndParseServerDrivenJson(trimmedUrl, force)
-            return@withContext jsonSuccess
+        if (trimmedUrl.endsWith(".json", ignoreCase = true) ||
+            trimmedUrl.contains("/channels.json") ||
+            trimmedUrl.contains("workers.dev") ||
+            trimmedUrl.contains("/channels") ||
+            trimmedUrl.contains("/api/channels")) {
+            return@withContext fetchAndParseServerDrivenJson(trimmedUrl, force)
         }
 
         var anyModified = false
@@ -550,30 +727,16 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                 val isDefaultOrInternalUrl = url.equals("default", ignoreCase = true) ||
                                              url.equals("all", ignoreCase = true) ||
                                              url.isBlank() ||
-                                             url == "https://iptv-org.github.io/iptv/index.m3u" ||
-                                             url == "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u"
+                                             url.contains("shakilemon73") ||
+                                             url.contains("abusaeeidx") ||
+                                             url == "https://iptv-org.github.io/iptv/index.m3u"
 
                 if (isDefaultOrInternalUrl) {
-                    for ((categoryName, categoryUrl) in CATEGORIZED_M3U_MAP) {
-                        try {
-                            val normalizedUrl = normalizeUrl(categoryUrl)
-                            val modified = downloadAndParseM3uContent(
-                                urlStr = normalizedUrl,
-                                tempCategories = tempCategories,
-                                channelsToInsert = channelsToInsert,
-                                maxChannels = maxChannels,
-                                isSubPlaylist = false,
-                                categoryOverride = categoryName,
-                                parsedStreamUrlsInSession = parsedStreamUrlsInSession,
-                                playlistUrl = normalizedUrl,
-                                force = forceSync
-                            )
-                            if (modified) {
-                                anyModified = true
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
+                    // Redirect to the secure server driven Cloudflare worker endpoint
+                    val defaultWorkerUrl = "https://iptv-api-worker.shakilemon71.workers.dev/api/channels"
+                    val (success, _) = fetchAndParseServerDrivenJson(defaultWorkerUrl, forceSync)
+                    if (success) {
+                        anyModified = true
                     }
                 } else {
                     if (url.startsWith("http://") || url.startsWith("https://")) {
@@ -602,13 +765,13 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
 
             if (channelsToInsert.isNotEmpty()) {
                 performSmartDeltaSync(channelsToInsert)
-                return@withContext true
+                return@withContext Pair(true, emptyList<Int>())
             } else {
                 // Last resort fallback only if download succeeded but returned absolutely nothing
                 val categories = dao.getAllCategoriesList()
                 if (categories.isEmpty()) {
                     seedFallbackData()
-                    return@withContext true
+                    return@withContext Pair(true, emptyList<Int>())
                 }
             }
         } catch (e: Exception) {
@@ -616,10 +779,10 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
             val categories = dao.getAllCategoriesList()
             if (categories.isEmpty()) {
                 seedFallbackData()
-                return@withContext true
+                return@withContext Pair(true, emptyList<Int>())
             }
         }
-        return@withContext anyModified
+        return@withContext Pair(anyModified, emptyList<Int>())
     }
 
     private fun normalizeUrl(url: String): String {
@@ -1079,7 +1242,10 @@ class LiveTvRepository(private val dao: LiveTvDao, private val context: android.
                 musicId to "Music"
             )
             val channelsWithCategories = curatedChannels.map { channel ->
-                val channelWithCat = channel.copy(category = categoryNamesMap[channel.categoryId] ?: "")
+                val channelWithCat = channel.copy(
+                    category = categoryNamesMap[channel.categoryId] ?: "",
+                    playlistUrl = "fallback_seed"
+                )
                 encryptChannelUrls(channelWithCat)
             }
             dao.insertChannels(channelsWithCategories)

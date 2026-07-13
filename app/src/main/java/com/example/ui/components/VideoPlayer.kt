@@ -93,7 +93,17 @@ fun VideoPlayer(
     val context = LocalContext.current
     val decryptedVideoUrl = remember(videoUrl) {
         if (videoUrl.startsWith("encrypted://")) {
-            StreamDecryptionUtility.decrypt(videoUrl)
+            val token = videoUrl.removePrefix("encrypted://")
+            val localDecrypted = try {
+                StreamDecryptionUtility.decrypt(videoUrl, context)
+            } catch (e: Exception) {
+                ""
+            }
+            if (localDecrypted.isNotBlank() && !localDecrypted.startsWith("encrypted://")) {
+                localDecrypted
+            } else {
+                "https://iptv-api-worker.shakilemon71.workers.dev/api/stream?t=${android.net.Uri.encode(token)}"
+            }
         } else {
             videoUrl
         }

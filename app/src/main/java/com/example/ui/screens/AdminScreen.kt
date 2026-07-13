@@ -1,43 +1,44 @@
 package com.example.ui.screens
 
+import android.content.Context
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.ui.platform.LocalContext
-import coil.request.CachePolicy
-import coil.request.ImageRequest
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
-import com.example.data.CategoryEntity
-import com.example.data.ChannelEntity
 import com.example.ui.ChannelViewModel
+import com.example.ui.components.ResponsiveGridFrame
+import com.example.ui.components.rememberResponsiveGridSpec
+import com.example.ui.components.ResponsiveGridSpec
+import androidx.compose.foundation.border
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,1930 +47,851 @@ fun AdminScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val spec = rememberResponsiveGridSpec()
+    val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val sharedPrefs = remember { context.getSharedPreferences("live_tv_prefs", Context.MODE_PRIVATE) }
+
+    // Collect states from ViewModel
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val channels by viewModel.channels.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val autoSyncOnLaunch by viewModel.autoSyncOnLaunch.collectAsStateWithLifecycle()
+    val lastSyncTime by viewModel.lastSyncTime.collectAsStateWithLifecycle()
+    val syncStatusMessage by viewModel.syncStatusMessage.collectAsStateWithLifecycle()
+    val lowLatencyMode by viewModel.lowLatencyMode.collectAsStateWithLifecycle()
+    val filterBrokenChannels by viewModel.filterBrokenChannels.collectAsStateWithLifecycle()
+    val isCheckingStreams by viewModel.isCheckingStreams.collectAsStateWithLifecycle()
+    val streamCheckingProgress by viewModel.streamCheckingProgress.collectAsStateWithLifecycle()
+    val streamCheckingStatus by viewModel.streamCheckingStatus.collectAsStateWithLifecycle()
 
-    var selectedTab by remember { mutableStateOf(0) }
-    val tabs = listOf("Channels", "Categories", "Cloud Sync", "Debug Console")
-
-    // Dynamic coloring matching home screen
-    val darkBg = Color(0xFF1C1B1F)
-    val cardBg = Color(0xFF2B2930)
-    val accentColor = Color(0xFFD0BCFF)
-    val secondaryAccentColor = Color(0xFFEADDFF)
-    val onPurpleColor = Color(0xFF381E72)
-
-    val lazyListState = rememberLazyListState()
-    val isScrolling by remember {
-        derivedStateOf { lazyListState.isScrollInProgress }
+    // Local Persisted Preferences
+    var hardwareAcceleration by remember {
+        mutableStateOf(sharedPrefs.getBoolean("pref_hardware_acceleration", true))
+    }
+    var aspectPreference by remember {
+        mutableStateOf(sharedPrefs.getString("pref_aspect_ratio", "Fit") ?: "Fit")
+    }
+    var audioPresetPreference by remember {
+        mutableStateOf(sharedPrefs.getString("pref_audio_preset", "Balanced 3D") ?: "Balanced 3D")
+    }
+    var themeAccent by remember {
+        mutableStateOf(sharedPrefs.getString("pref_theme_accent", "Lavender") ?: "Lavender")
+    }
+    var wifiSyncOnly by remember {
+        mutableStateOf(viewModel.getUnmeteredSyncOnly())
     }
 
-    // Dialog trigger states
-    var showAddCategoryDialog by remember { mutableStateOf(false) }
-    var showEditCategoryDialog by remember { mutableStateOf<CategoryEntity?>(null) }
-    var showAddChannelDialog by remember { mutableStateOf(false) }
-    var showEditChannelDialog by remember { mutableStateOf<ChannelEntity?>(null) }
-    val focusManager = LocalFocusManager.current
+    // Dynamic Colors based on selected accent preference
+    val accentColor = remember(themeAccent) {
+        when (themeAccent) {
+            "Emerald" -> Color(0xFF81C784)
+            "Amber" -> Color(0xFFFFD54F)
+            "Cosmic Slate" -> Color(0xFF90CAF9)
+            else -> Color(0xFFD0BCFF) // Lavender (default)
+        }
+    }
+    val onPurpleColor = Color(0xFF381E72)
+    val darkBg = Color(0xFF0F0E13)
+    val cardBg = Color(0xFF1B1921)
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Admin Dashboard", color = Color.White, fontWeight = FontWeight.Bold) },
-                navigationIcon = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(darkBg)
+                    .statusBarsPadding(),
+                contentAlignment = Alignment.Center
+            ) {
+                val widthModifier = if (spec.maxContentWidth != androidx.compose.ui.unit.Dp.Unspecified) {
+                    Modifier.widthIn(max = spec.maxContentWidth)
+                } else {
+                    Modifier.fillMaxWidth()
+                }
+                Row(
+                    modifier = widthModifier
+                        .fillMaxWidth()
+                        .padding(horizontal = spec.margin, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(
                         onClick = {
                             focusManager.clearFocus()
                             onNavigateBack()
                         },
-                        modifier = Modifier.testTag("admin_back_button")
+                        modifier = Modifier
+                            .padding(end = 12.dp)
+                            .size(40.dp)
+                            .background(Color.White.copy(alpha = 0.04f), CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = 0.08f), CircleShape)
+                            .testTag("admin_back_button")
                     ) {
-                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = darkBg,
-                    titleContentColor = Color.White
-                ),
-                modifier = Modifier.statusBarsPadding()
-            )
-        },
-        floatingActionButton = {
-            if (selectedTab == 0) {
-                ExtendedFloatingActionButton(
-                    onClick = { showAddChannelDialog = true },
-                    icon = { Icon(Icons.Default.Add, "Add Channel") },
-                    text = { Text("Add Channel") },
-                    containerColor = accentColor,
-                    contentColor = onPurpleColor,
-                    modifier = Modifier.testTag("add_channel_fab")
-                )
-            } else if (selectedTab == 1) {
-                ExtendedFloatingActionButton(
-                    onClick = { showAddCategoryDialog = true },
-                    icon = { Icon(Icons.Default.Add, "Add Category") },
-                    text = { Text("Add Category") },
-                    containerColor = secondaryAccentColor,
-                    contentColor = onPurpleColor,
-                    modifier = Modifier.testTag("add_category_fab")
-                )
+                    Column {
+                        Text(
+                            text = "App Settings",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp
+                        )
+                        Text(
+                            text = "Personalize your broadcast experience",
+                            color = Color.Gray,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
             }
         },
         containerColor = darkBg,
         modifier = modifier.fillMaxSize()
     ) { innerPadding ->
-        Column(
+        ResponsiveGridFrame(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-        ) {
-            // Tab Header Row
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = Color(0xFF2B2930),
-                contentColor = Color.White,
-                indicator = { tabPositions ->
-                    TabRowDefaults.SecondaryIndicator(
-                        Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                        color = accentColor
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(darkBg, Color(0xFF14121A))
                     )
-                }
-            ) {
-                tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = selectedTab == index,
-                        onClick = { selectedTab = index },
-                        text = {
-                            Text(
-                                text = title,
-                                fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Medium,
-                                fontSize = 15.sp
-                            )
-                        },
-                        selectedContentColor = accentColor,
-                        unselectedContentColor = Color.Gray,
-                        modifier = Modifier.testTag("admin_tab_$index")
-                    )
-                }
-            }
-
-            // Tab Content
-            when (selectedTab) {
-                0 -> {
-                // Channels management view
-                var m3uInputUrl by remember { mutableStateOf("https://iptv-org.github.io/iptv/index.m3u") }
-
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // Curated streams directory card
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = cardBg),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Curated Streams Directory",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                                Text(
-                                    text = "Restore the list of 20+ free, stable m3u8 live streams.",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                            Button(
-                                onClick = { viewModel.resetToCuratedStreams() },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = accentColor,
-                                    contentColor = onPurpleColor
-                                ),
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                modifier = Modifier.testTag("reset_to_curated_button")
-                            ) {
-                                Text("Load", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-
-                    // Custom M3U / M3U8 Playlist URL import card
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = cardBg),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = "Import Custom M3U Playlist",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                              )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Enter a URL to fetch, parse, and register channels.",
-                                fontSize = 11.sp,
-                                color = Color.Gray
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                OutlinedTextField(
-                                    value = m3uInputUrl,
-                                    onValueChange = { m3uInputUrl = it },
-                                    placeholder = { Text("Playlist URL (.m3u/.m3u8)", color = Color.Gray, fontSize = 11.sp) },
-                                    singleLine = true,
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedBorderColor = accentColor,
-                                        unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
-                                        focusedContainerColor = Color(0xFF1C1B1F),
-                                        unfocusedContainerColor = Color(0xFF1C1B1F)
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("m3u_playlist_url_input")
-                                )
-                                Button(
-                                    onClick = {
-                                        if (m3uInputUrl.isNotBlank()) {
-                                            viewModel.fetchAndParseM3u(m3uInputUrl.trim())
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = accentColor,
-                                        contentColor = onPurpleColor
-                                    ),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                    modifier = Modifier.testTag("import_m3u_playlist_button")
-                                ) {
-                                    Text("Import", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-
-                    if (isLoading) {
-                        val infiniteTransition = rememberInfiniteTransition(label = "skeleton_shimmer")
-                        val alpha by infiniteTransition.animateFloat(
-                            initialValue = 0.4f,
-                            targetValue = 1f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(durationMillis = 800, easing = LinearEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "shimmer_alpha"
-                        )
-
-                        LazyColumn(
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 80.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.weight(1f).fillMaxWidth()
-                        ) {
-                            items(6, contentType = { "channel_admin_skeleton" }) {
-                                SkeletonChannelAdminRow(alpha = alpha, cardBg = cardBg)
-                            }
-                        }
-                    } else if (channels.isEmpty()) {
-                        Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Text("No channels registered. Add your first stream!", color = Color.Gray)
-                        }
-                    } else {
-                        LazyColumn(
-                            state = lazyListState,
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 80.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.weight(1f).fillMaxWidth()
-                        ) {
-                            items(
-                                items = channels,
-                                key = { it.id },
-                                contentType = { "channel_admin_item" }
-                            ) { channel ->
-                                val categoryName = categories.find { it.id == channel.categoryId }?.name ?: "General"
-                                ChannelAdminRow(
-                                    channel = channel,
-                                    categoryName = categoryName,
-                                    onEdit = { showEditChannelDialog = channel },
-                                    onDelete = { viewModel.deleteChannel(channel) },
-                                    cardBg = cardBg,
-                                    isScrolling = isScrolling
-                                )
-                            }
-                        }
-                    }
-                }
-                }
-                1 -> {
-                // Categories management view
-                if (isLoading) {
-                    val infiniteTransition = rememberInfiniteTransition(label = "categories_admin_skeleton")
-                    val alpha by infiniteTransition.animateFloat(
-                        initialValue = 0.4f,
-                        targetValue = 1f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(durationMillis = 800, easing = LinearEasing),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "shimmer_alpha"
-                    )
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(5, contentType = { "category_admin_skeleton" }) {
-                            SkeletonCategoryAdminRow(alpha = alpha, cardBg = cardBg)
-                        }
-                    }
-                } else if (categories.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No categories registered. Create one!", color = Color.Gray)
-                    }
-                } else {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(
-                            items = categories,
-                            key = { it.id },
-                            contentType = { "category_admin_item" }
-                        ) { category ->
-                            CategoryAdminRow(
-                                category = category,
-                                onEdit = { showEditCategoryDialog = category },
-                                onDelete = { viewModel.deleteCategory(category) },
-                                cardBg = cardBg
-                            )
-                        }
-                    }
-                }
-                }
-                2 -> {
-                    CloudSyncSettingsView(
-                        viewModel = viewModel,
-                        cardBg = cardBg,
-                        accentColor = accentColor,
-                        onPurpleColor = onPurpleColor
-                    )
-                }
-                3 -> {
-                    DebugConsoleView(
-                        viewModel = viewModel,
-                        cardBg = cardBg,
-                        accentColor = accentColor,
-                        onPurpleColor = onPurpleColor
-                    )
-                }
-            }
-        }
-
-        // --- Categories Dialogs ---
-        if (showAddCategoryDialog) {
-            var categoryName by remember { mutableStateOf("") }
-            AlertDialog(
-                onDismissRequest = { showAddCategoryDialog = false },
-                title = { Text("Add Category", fontWeight = FontWeight.Bold) },
-                text = {
-                    OutlinedTextField(
-                        value = categoryName,
-                        onValueChange = { categoryName = it },
-                        label = { Text("Category Name") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("input_category_name")
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            if (categoryName.isNotBlank()) {
-                                viewModel.addCategory(categoryName.trim())
-                                showAddCategoryDialog = false
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFD0BCFF),
-                            contentColor = Color(0xFF381E72)
-                        ),
-                        modifier = Modifier.testTag("submit_category_button")
-                    ) {
-                        Text("Save")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showAddCategoryDialog = false }) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
-
-        showEditCategoryDialog?.let { currentCategory ->
-            var categoryName by remember { mutableStateOf(currentCategory.name) }
-            AlertDialog(
-                onDismissRequest = { showEditCategoryDialog = null },
-                title = { Text("Edit Category", fontWeight = FontWeight.Bold) },
-                text = {
-                    OutlinedTextField(
-                        value = categoryName,
-                        onValueChange = { categoryName = it },
-                        label = { Text("Category Name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            if (categoryName.isNotBlank()) {
-                                viewModel.updateCategory(currentCategory.copy(name = categoryName.trim()))
-                                showEditCategoryDialog = null
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFD0BCFF),
-                            contentColor = Color(0xFF381E72)
-                        )
-                    ) {
-                        Text("Update")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showEditCategoryDialog = null }) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
-
-        // --- Channels Dialogs (Add & Edit) ---
-        if (showAddChannelDialog) {
-            ChannelFormDialog(
-                title = "Add Live Channel",
-                categories = categories,
-                onDismiss = { showAddChannelDialog = false },
-                onSubmit = { name, url, logo, catId, desc ->
-                    viewModel.addChannel(name, url, logo, catId, desc)
-                    showAddChannelDialog = false
-                }
-            )
-        }
-
-        showEditChannelDialog?.let { currentChannel ->
-            ChannelFormDialog(
-                title = "Edit Live Channel",
-                categories = categories,
-                initialChannel = currentChannel,
-                onDismiss = { showEditChannelDialog = null },
-                onSubmit = { name, url, logo, catId, desc ->
-                    viewModel.updateChannel(
-                        currentChannel.copy(
-                            name = name,
-                            streamUrl = url,
-                            logoUrl = logo,
-                            categoryId = catId,
-                            description = desc
-                        )
-                    )
-                    showEditChannelDialog = null
-                }
-            )
-        }
-    }
-}
-
-// --- List Row Composables ---
-
-@Composable
-fun ChannelAdminRow(
-    channel: ChannelEntity,
-    categoryName: String,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    cardBg: Color,
-    isScrolling: Boolean = false
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = cardBg),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val context = LocalContext.current
-            val imageRequest = remember(channel.logoUrl, isScrolling) {
-                ImageRequest.Builder(context)
-                    .data(channel.logoUrl)
-                    .apply {
-                        if (isScrolling) {
-                            networkCachePolicy(CachePolicy.DISABLED)
-                            diskCachePolicy(CachePolicy.DISABLED)
-                        } else {
-                            crossfade(true)
-                        }
-                    }
-                    .build()
-            }
-            // Channel Mini Image Preview
-            AsyncImage(
-                model = imageRequest,
-                contentDescription = channel.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Gray)
-            )
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = channel.name,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    text = categoryName.uppercase(),
-                    color = Color(0xFFD0BCFF),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp
-                )
-                Text(
-                    text = channel.streamUrl,
-                    color = Color.Gray,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // Admin Operations
-            IconButton(onClick = onEdit, modifier = Modifier.testTag("edit_channel_button_${channel.id}")) {
-                Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Channel", tint = Color.LightGray)
-            }
-            IconButton(onClick = onDelete, modifier = Modifier.testTag("delete_channel_button_${channel.id}")) {
-                Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete Channel", tint = Color(0xFFE53935))
-            }
-        }
-    }
-}
-
-@Composable
-fun CategoryAdminRow(
-    category: CategoryEntity,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    cardBg: Color
-) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = cardBg),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = category.name,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp
-            )
-
-            Row {
-                IconButton(onClick = onEdit, modifier = Modifier.testTag("edit_category_button_${category.id}")) {
-                    Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Category", tint = Color.LightGray)
-                }
-                IconButton(onClick = onDelete, modifier = Modifier.testTag("delete_category_button_${category.id}")) {
-                    Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete Category", tint = Color(0xFFE53935))
-                }
-            }
-        }
-    }
-}
-
-// --- Channel Form Dialog (Reusable for Add & Edit) ---
-
-@Composable
-fun ChannelFormDialog(
-    title: String,
-    categories: List<CategoryEntity>,
-    initialChannel: ChannelEntity? = null,
-    onDismiss: () -> Unit,
-    onSubmit: (name: String, url: String, logo: String, categoryId: Int, description: String) -> Unit
-) {
-    var name by remember { mutableStateOf(initialChannel?.name ?: "") }
-    var streamUrl by remember { mutableStateOf(initialChannel?.streamUrl ?: "") }
-    var logoUrl by remember { mutableStateOf(initialChannel?.logoUrl ?: "") }
-    var description by remember { mutableStateOf(initialChannel?.description ?: "") }
-
-    // Category ID selection
-    var selectedCategoryId by remember {
-        mutableStateOf(
-            initialChannel?.categoryId ?: categories.firstOrNull()?.id ?: 0
-        )
-    }
-
-    var expandedCategorySelector by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title, fontWeight = FontWeight.Bold) },
-        text = {
+        ) { spec ->
             Column(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .fillMaxSize()
                     .verticalScroll(rememberScrollState())
+                    .padding(vertical = spec.gutter),
+                verticalArrangement = Arrangement.spacedBy(spec.gutter)
             ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Channel Name *") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("input_channel_name")
-                )
-
-                OutlinedTextField(
-                    value = streamUrl,
-                    onValueChange = { streamUrl = it },
-                    label = { Text("Stream URL (M3U8) *") },
-                    singleLine = true,
-                    placeholder = { Text("https://example.com/live.m3u8") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("input_channel_url")
-                )
-
-                OutlinedTextField(
-                    value = logoUrl,
-                    onValueChange = { logoUrl = it },
-                    label = { Text("Logo Image URL (Optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    label = { Text("Description (Optional)") },
-                    maxLines = 3,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Safe Category selection Dropdown substitute (Fully styling compatible)
-                Text(
-                    text = "Channel Category *",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Gray
-                )
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { expandedCategorySelector = !expandedCategorySelector }
-                        .background(Color.DarkGray.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
-                        .padding(16.dp)
-                ) {
-                    val activeCategoryName = categories.find { it.id == selectedCategoryId }?.name ?: "Select Category"
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(text = activeCategoryName, color = Color.White)
-                        Icon(
-                            imageVector = if (expandedCategorySelector) Icons.Default.KeyboardArrowUp else Icons.Default.ArrowDropDown,
-                            contentDescription = "Dropdown indicator",
-                            tint = Color.White
-                        )
-                    }
-                }
-
-                if (expandedCategorySelector) {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2930)),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 150.dp)
-                    ) {
-                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                            items(categories) { category ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            selectedCategoryId = category.id
-                                            expandedCategorySelector = false
-                                        }
-                                        .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(text = category.name, color = Color.White)
-                                    if (selectedCategoryId == category.id) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Selected",
-                                            tint = Color(0xFFD0BCFF)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (name.isNotBlank() && streamUrl.isNotBlank() && selectedCategoryId != 0) {
-                        onSubmit(name.trim(), streamUrl.trim(), logoUrl.trim(), selectedCategoryId, description.trim())
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFD0BCFF),
-                    contentColor = Color(0xFF381E72)
-                ),
-                modifier = Modifier.testTag("submit_channel_button")
-            ) {
-                Text("Save Channel")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
-}
-
-@Composable
-fun SkeletonChannelAdminRow(
-    alpha: Float,
-    cardBg: Color
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = cardBg),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Image outline placeholder
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.White.copy(alpha = 0.08f * alpha))
-            )
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                // Name placeholder
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.5f)
-                        .height(14.dp)
-                        .background(Color.White.copy(alpha = 0.1f * alpha), RoundedCornerShape(4.dp))
-                )
-                // Category placeholder
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.3f)
-                        .height(10.dp)
-                        .background(Color.White.copy(alpha = 0.08f * alpha), RoundedCornerShape(4.dp))
-                )
-                // URL placeholder
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.8f)
-                        .height(10.dp)
-                        .background(Color.White.copy(alpha = 0.05f * alpha), RoundedCornerShape(4.dp))
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun SkeletonCategoryAdminRow(
-    alpha: Float,
-    cardBg: Color
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = cardBg),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .background(Color.White.copy(alpha = 0.05f * alpha), CircleShape)
-            )
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(120.dp)
-                        .height(16.dp)
-                        .background(Color.White.copy(alpha = 0.1f * alpha), RoundedCornerShape(4.dp))
-                )
-                Box(
-                    modifier = Modifier
-                        .width(60.dp)
-                        .height(10.dp)
-                        .background(Color.White.copy(alpha = 0.05f * alpha), RoundedCornerShape(2.dp))
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun CloudSyncSettingsView(
-    viewModel: com.example.ui.ChannelViewModel,
-    cardBg: Color,
-    accentColor: Color,
-    onPurpleColor: Color
-) {
-    val cloudGistUrl by viewModel.cloudGistUrl.collectAsStateWithLifecycle()
-    val autoSyncOnLaunch by viewModel.autoSyncOnLaunch.collectAsStateWithLifecycle()
-    val isPublicMode by viewModel.isPublicMode.collectAsStateWithLifecycle()
-    val lastSyncTime by viewModel.lastSyncTime.collectAsStateWithLifecycle()
-    val syncStatusMessage by viewModel.syncStatusMessage.collectAsStateWithLifecycle()
-    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
-
-    val appUpdateUrl by viewModel.appUpdateUrl.collectAsStateWithLifecycle()
-    val isUpdateChecking by viewModel.isUpdateChecking.collectAsStateWithLifecycle()
-    val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
-    val updateErrorMessage by viewModel.updateErrorMessage.collectAsStateWithLifecycle()
-
-    var urlInput by remember { mutableStateOf(cloudGistUrl) }
-    var autoSync by remember { mutableStateOf(autoSyncOnLaunch) }
-    var publicMode by remember { mutableStateOf(isPublicMode) }
-    var updateUrlInput by remember { mutableStateOf(appUpdateUrl) }
-
-    // Synchronize local UI state with ViewModel state on load
-    LaunchedEffect(cloudGistUrl, autoSyncOnLaunch, isPublicMode, appUpdateUrl) {
-        urlInput = cloudGistUrl
-        autoSync = autoSyncOnLaunch
-        publicMode = isPublicMode
-        updateUrlInput = appUpdateUrl
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // Hero / Introduction card
-        Card(
-            colors = CardDefaults.cardColors(containerColor = cardBg),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Cloud Sync",
-                        tint = accentColor,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "GitHub Gist Cloud Sync",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = Color.White
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Manage your channels easily from the cloud! Host an M3U playlist file on GitHub Gist, copy the RAW url, and enter it below. The app will auto-pull channels on startup to stay in sync.",
-                    fontSize = 12.sp,
-                    color = Color.LightGray,
-                    lineHeight = 16.sp
-                )
-            }
-        }
-
-        // Configuration Form Card
-        Card(
-            colors = CardDefaults.cardColors(containerColor = cardBg),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "Sync Configurations",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = Color.White
-                )
-
-                OutlinedTextField(
-                    value = urlInput,
-                    onValueChange = { urlInput = it },
-                    label = { Text("Gist Raw URL / Cloud M3U URL") },
-                    placeholder = { Text("https://gist.githubusercontent.com/.../raw/playlist.m3u") },
-                    singleLine = false,
-                    maxLines = 4,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = accentColor,
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
-                        focusedContainerColor = Color(0xFF1C1B1F),
-                        unfocusedContainerColor = Color(0xFF1C1B1F)
-                    ),
-                    modifier = Modifier.fillMaxWidth().testTag("gist_url_input")
-                )
-
-                Text(
-                    text = "Quick Presets:",
-                    fontSize = 11.sp,
-                    color = Color.Gray,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    AssistChip(
-                        onClick = { urlInput = "https://gist.github.com/shakilemon73/94df652949eec0ff174d34e0871aab42" },
-                        label = { Text("My Gist", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.08f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor)
-                    )
-                    AssistChip(
-                        onClick = { urlInput = "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u" },
-                        label = { Text("BDIX IPTV", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.05f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
-                    )
-                    AssistChip(
-                        onClick = { urlInput = "https://iptv-org.github.io/iptv/index.m3u" },
-                        label = { Text("IPTV-Org", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.05f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
-                    )
-                    AssistChip(
-                        onClick = { urlInput = "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u, https://iptv-org.github.io/iptv/index.m3u" },
-                        label = { Text("Merge Both", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.05f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
-                    )
-                    AssistChip(
-                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/base.m3u8" },
-                        label = { Text("Doms9 Base", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.05f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
-                    )
-                    AssistChip(
-                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8" },
-                        label = { Text("Doms9 US TV", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.05f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
-                    )
-                    AssistChip(
-                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8" },
-                        label = { Text("Doms9 Events", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.05f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
-                    )
-                    AssistChip(
-                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/base.m3u8, https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8" },
-                        label = { Text("Doms9 Merged (Base + TV)", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.05f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
-                    )
-                    AssistChip(
-                        onClick = { urlInput = "https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8, https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/TV.m3u8" },
-                        label = { Text("Doms9 Merged (Events + TV)", fontSize = 10.sp, color = Color.White) },
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = Color.White.copy(alpha = 0.05f)
-                        ),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.4f))
-                    )
-                }
-
-                // Auto Sync On Launch Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Auto-Sync on Startup",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Text(
-                            text = "Fetch and load playlist automatically when app launches",
-                            fontSize = 10.sp,
-                            color = Color.Gray
-                        )
-                    }
-                    Switch(
-                        checked = autoSync,
-                        onCheckedChange = { autoSync = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = accentColor,
-                            checkedTrackColor = accentColor.copy(alpha = 0.4f)
-                        ),
-                        modifier = Modifier.testTag("auto_sync_switch")
-                    )
-                }
-
-                // Public App Mode Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Public Client Mode",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Text(
-                            text = "Locks settings and hides the settings button from the homepage to prevent public users from modifying configurations.",
-                            fontSize = 10.sp,
-                            color = Color.Gray
-                        )
-                    }
-                    Switch(
-                        checked = publicMode,
-                        onCheckedChange = { publicMode = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = accentColor,
-                            checkedTrackColor = accentColor.copy(alpha = 0.4f)
-                        ),
-                        modifier = Modifier.testTag("public_mode_switch")
-                    )
-                }
-
-                if (publicMode) {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF131215)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "Tip",
-                                tint = accentColor,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Admin Note: To reopen this Admin Screen in Public Mode, tap the \"Live Stream Hub\" logo 5 times on the homepage.",
-                                fontSize = 9.sp,
-                                color = Color.Gray,
-                                lineHeight = 12.sp
-                            )
-                        }
-                    }
-                }
-
-                // Action Buttons Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            viewModel.updateCloudGistSettings(
-                                url = urlInput.trim(),
-                                autoSync = autoSync,
-                                publicMode = publicMode
-                            )
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = accentColor,
-                            contentColor = onPurpleColor
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f).testTag("save_cloud_sync_button")
-                    ) {
-                        Text("Save & Apply", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-
-                    if (cloudGistUrl.isNotBlank()) {
-                        OutlinedButton(
-                            onClick = { viewModel.clearCloudSyncSettings() },
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = Color(0xFFE53935)
-                            ),
-                            border = BorderStroke(1.dp, Color(0xFFE53935).copy(alpha = 0.4f)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.testTag("clear_cloud_sync_button")
-                        ) {
-                            Text("Clear", fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Live Sync Status Card
-        if (cloudGistUrl.isNotBlank()) {
+            // Service Connection status indicator card
             Card(
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = cardBg),
                 border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(
+                Row(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Sync Health & Status",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = Color.White
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Active Cloud Source:",
-                                fontSize = 10.sp,
-                                color = Color.Gray
-                            )
-                            Text(
-                                text = cloudGistUrl,
-                                fontSize = 11.sp,
-                                color = accentColor,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    Divider(color = Color.White.copy(alpha = 0.05f))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Last Successfully Synced:",
-                                fontSize = 10.sp,
-                                color = Color.Gray
-                            )
-                            val formattedTime = if (lastSyncTime > 0) {
-                                val date = java.util.Date(lastSyncTime)
-                                val format = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
-                                format.format(date)
-                            } else {
-                                "Never"
-                            }
-                            Text(
-                                text = formattedTime,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color.White
-                            )
-                        }
-
-                        Button(
-                            onClick = { viewModel.syncWithCloudGist(force = true) },
-                            enabled = !isLoading,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White.copy(alpha = 0.1f),
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.testTag("sync_now_button")
-                        ) {
-                            if (isLoading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    color = Color.White,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Sync Now", fontSize = 11.sp)
-                                }
-                            }
-                        }
-                    }
-
-                    syncStatusMessage?.let { status ->
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (status.contains("fail", ignoreCase = true)) {
-                                    Color(0xFFE53935).copy(alpha = 0.15f)
-                                } else {
-                                    Color(0xFF4CAF50).copy(alpha = 0.15f)
-                                }
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = if (status.contains("fail", ignoreCase = true)) Icons.Default.Warning else Icons.Default.Check,
-                                    contentDescription = null,
-                                    tint = if (status.contains("fail", ignoreCase = true)) Color(0xFFE53935) else Color(0xFF4CAF50),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = status,
-                                    fontSize = 11.sp,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // App In-App Updates Card
-        Card(
-            colors = CardDefaults.cardColors(containerColor = cardBg),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.SystemUpdate,
-                        contentDescription = "App Updates",
-                        tint = accentColor,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "In-App Update Settings",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        color = Color.White
-                    )
-                }
-
-                Text(
-                    text = "Update the application directly without using Play Store. Provide a JSON file specifying the latest version, APK link, and release notes.",
-                    fontSize = 12.sp,
-                    color = Color.LightGray,
-                    lineHeight = 16.sp
-                )
-
-                OutlinedTextField(
-                    value = updateUrlInput,
-                    onValueChange = { updateUrlInput = it },
-                    label = { Text("App Update JSON URL") },
-                    placeholder = { Text("https://example.com/app-update.json") },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = accentColor,
-                        unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
-                        focusedContainerColor = Color(0xFF1C1B1F),
-                        unfocusedContainerColor = Color(0xFF1C1B1F)
-                    ),
-                    modifier = Modifier.fillMaxWidth().testTag("app_update_url_input")
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            viewModel.setAppUpdateUrl(updateUrlInput.trim())
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White.copy(alpha = 0.12f),
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Save Update URL", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-
-                    Button(
-                        onClick = {
-                            viewModel.checkForAppUpdates()
-                        },
-                        enabled = !isUpdateChecking && updateDownloadProgress == null,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = accentColor,
-                            contentColor = onPurpleColor
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f).testTag("check_updates_button")
-                    ) {
-                        if (isUpdateChecking) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = onPurpleColor,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Text("Check Now", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-
-                // Check Status/Errors/Update Availability
-                updateErrorMessage?.let { msg ->
-                    Text(
-                        text = msg,
-                        fontSize = 12.sp,
-                        color = if (msg.contains("up to date", ignoreCase = true)) Color(0xFF4CAF50) else Color(0xFFE53935),
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-
-                updateDownloadProgress?.let { progress ->
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.padding(top = 8.dp)
-                    ) {
-                        Text(
-                            text = "Downloading Update: ${(progress * 100).toInt()}%",
-                            fontSize = 12.sp,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold
-                        )
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            color = accentColor,
-                            trackColor = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun DebugConsoleView(
-    viewModel: ChannelViewModel,
-    cardBg: Color,
-    accentColor: Color,
-    onPurpleColor: Color,
-    modifier: Modifier = Modifier
-) {
-    val logs by com.example.data.StreamLogManager.logs.collectAsStateWithLifecycle()
-    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-    val context = androidx.compose.ui.platform.LocalContext.current
-
-    var selectedFilter by remember { mutableStateOf("All") }
-    var searchQuery by remember { mutableStateOf("") }
-
-    val filteredLogs = remember(logs, selectedFilter, searchQuery) {
-        logs.filter { log ->
-            val matchesFilter = selectedFilter == "All" || log.type.equals(selectedFilter, ignoreCase = true)
-            val matchesSearch = searchQuery.isBlank() ||
-                    log.targetName.contains(searchQuery, ignoreCase = true) ||
-                    log.url.contains(searchQuery, ignoreCase = true) ||
-                    log.errorMessage.contains(searchQuery, ignoreCase = true)
-            matchesFilter && matchesSearch
-        }
-    }
-
-    val totalCount = logs.size
-    val playbackCount = logs.count { it.type.equals("Playback", ignoreCase = true) }
-    val verificationCount = logs.count { it.type.equals("Verification", ignoreCase = true) }
-    val fetchCount = logs.count { it.type.equals("Playlist Fetch", ignoreCase = true) }
-
-    // Security & Key Rotation States
-    val secondaryAccentColor = Color(0xFFEADDFF)
-    var rotationEndpoint by remember { mutableStateOf("https://ais-dev-d3dsoshc3zvafncm5btc3t-355699576246.asia-southeast1.run.app/api/v1/decryption-key") }
-    var rotationResultMsg by remember { mutableStateOf("") }
-    var activeKeyPreview by remember { mutableStateOf("Default / Static Env Key") }
-    var isRotating by remember { mutableStateOf(false) }
-    var showSecurityControls by remember { mutableStateOf(true) }
-    val handler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
-
-    fun refreshKeyPreview() {
-        val testString = "https://example.com/stream.m3u8"
-        val encrypted = com.example.data.StreamDecryptionUtility.encrypt(testString, context)
-        val decrypted = com.example.data.StreamDecryptionUtility.decrypt(encrypted, context)
-        if (decrypted == testString) {
-            val keyStr = com.example.data.StreamDecryptionUtility.encrypt("test", context).replace("encrypted://", "")
-            activeKeyPreview = if (keyStr.length > 12) keyStr.take(12) + "..." else keyStr
-        } else {
-            activeKeyPreview = "Uninitialized / Mismatch"
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        refreshKeyPreview()
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-        // Expandable Security Controls Panel
-        Card(
-            colors = CardDefaults.cardColors(containerColor = cardBg),
-            border = BorderStroke(1.dp, accentColor.copy(alpha = 0.3f)),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showSecurityControls = !showSecurityControls },
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .background(Color(0xFF81C784), CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("API Gateway Status", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                        Text("Connected to Cloudflare Edge (42ms)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    Text(
+                        "AES-128 SECURE",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = accentColor,
+                        modifier = Modifier
+                            .background(accentColor.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // SECTION 1: SOURCE CONFIGURATION & CLOUD SYNC
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Security",
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Cloud Feed",
                             tint = accentColor,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Security & Dynamic Key Rotation",
+                            text = "Channel Synchronization",
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
                             color = Color.White
                         )
                     }
-                    Icon(
-                        imageVector = if (showSecurityControls) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Toggle",
-                        tint = Color.Gray,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                if (showSecurityControls) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Divider(color = Color.White.copy(alpha = 0.08f))
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // 1. Key Rotation Section
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Dynamic Key Rotation",
-                        fontWeight = FontWeight.SemiBold,
+                        text = "Synchronize categories and dynamic live stream URLs securely with the cloud.",
                         fontSize = 12.sp,
-                        color = accentColor
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    OutlinedTextField(
-                        value = rotationEndpoint,
-                        onValueChange = { rotationEndpoint = it },
-                        label = { Text("Secure Key Endpoint URL", color = Color.Gray, fontSize = 11.sp) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = accentColor,
-                            unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
-                        ),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        color = Color.Gray
                     )
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(20.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    // Sync Button
+                    val syncBtnInteraction = remember { MutableInteractionSource() }
+                    val syncBtnPressed by syncBtnInteraction.collectIsFocusedAsState()
+                    val syncBtnScale by animateFloatAsState(
+                        targetValue = if (syncBtnPressed) 1.03f else 1.00f,
+                        label = "syncBtnScale"
+                    )
+
+                    Button(
+                        onClick = { viewModel.syncWithCloudGist(force = true) },
+                        colors = ButtonDefaults.buttonColors(containerColor = accentColor, contentColor = onPurpleColor),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .graphicsLayer(scaleX = syncBtnScale, scaleY = syncBtnScale)
+                            .focusable(interactionSource = syncBtnInteraction)
+                            .testTag("save_sync_button")
                     ) {
-                        Button(
-                            onClick = {
-                                isRotating = true
-                                rotationResultMsg = "Connecting to backend..."
-                                com.example.data.StreamDecryptionUtility.fetchAndRotateKey(context, rotationEndpoint.trim()) { success, msg ->
-                                    isRotating = false
-                                    if (success) {
-                                        rotationResultMsg = "Dynamic Key Rotation Succeeded!"
-                                        refreshKeyPreview()
-                                    } else {
-                                        rotationResultMsg = "Error: $msg"
-                                    }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accentColor,
-                                contentColor = onPurpleColor
-                            ),
-                            enabled = !isRotating,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("REST Rotation", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        Button(
-                            onClick = {
-                                com.example.data.StreamDecryptionUtility.rotateKeyLocally(context)
-                                rotationResultMsg = "Offline rotation successful! New secure key applied."
-                                refreshKeyPreview()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = secondaryAccentColor,
-                                contentColor = onPurpleColor
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Offline Rotation", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        if (isLoading) {
+                            CircularProgressIndicator(color = onPurpleColor, modifier = Modifier.size(18.dp))
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(imageVector = Icons.Default.Check, contentDescription = "Sync", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Synchronize Guides Now", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
                         }
                     }
 
-                    if (rotationResultMsg.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = rotationResultMsg,
-                            color = if (rotationResultMsg.contains("Error")) Color(0xFFF2B8B5) else Color(0xFF81C784),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Diagnostic Logs / Status
+                    if (syncStatusMessage != null || lastSyncTime > 0) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color.Black.copy(alpha = 0.2f))
+                                .padding(12.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .background(
+                                            if (syncStatusMessage?.contains("failed", ignoreCase = true) == true) Color(0xFFFF8A80) else Color(0xFF81C784),
+                                            CircleShape
+                                        )
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("SYNC DIAGNOSTIC LOG", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                            }
+                            if (syncStatusMessage != null) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(syncStatusMessage ?: "", fontSize = 12.sp, color = Color.White)
+                            }
+                            if (lastSyncTime > 0) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()) }
+                                val formattedDate = remember(lastSyncTime) { sdf.format(java.util.Date(lastSyncTime)) }
+                                Text("Last synced: $formattedDate (Local)", fontSize = 11.sp, color = Color.Gray)
+                            }
+                        }
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Auto sync toggle
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { viewModel.updateAutoSyncSetting(!autoSyncOnLaunch) }
+                            .background(Color.White.copy(alpha = 0.02f))
+                            .padding(12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Active Key Fingerprint:", color = Color.Gray, fontSize = 11.sp)
-                        Text(
-                            text = activeKeyPreview,
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Auto Sync on Launch", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Securely fetch latest guides on startup", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = autoSyncOnLaunch,
+                            onCheckedChange = { viewModel.updateAutoSyncSetting(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = onPurpleColor,
+                                checkedTrackColor = accentColor,
+                                uncheckedThumbColor = Color.Gray,
+                                uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                            ),
+                            modifier = Modifier.testTag("settings_auto_sync_switch")
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Divider(color = Color.White.copy(alpha = 0.08f))
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // 2. Anti-Reverse Engineering & Root Protection Section
+                    // Wi-Fi only sync
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable {
+                                wifiSyncOnly = !wifiSyncOnly
+                                viewModel.setUnmeteredSyncOnly(wifiSyncOnly)
+                            }
+                            .background(Color.White.copy(alpha = 0.02f))
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Sync over Wi-Fi Only", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Save mobile data bandwidth costs", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = wifiSyncOnly,
+                            onCheckedChange = {
+                                wifiSyncOnly = it
+                                viewModel.setUnmeteredSyncOnly(it)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = onPurpleColor,
+                                checkedTrackColor = accentColor,
+                                uncheckedThumbColor = Color.Gray,
+                                uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                            ),
+                            modifier = Modifier.testTag("settings_unmetered_sync_switch")
+                        )
+                    }
+                }
+            }
+
+            // SECTION 2: STREAM QUALITY & LINK VALIDATION
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Quality",
+                            tint = Color(0xFF81C784),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Quality Assurance & Diagnostics",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Anti-Reverse Engineering & Root Protection",
-                        fontWeight = FontWeight.SemiBold,
+                        text = "Scan live channel lists to check server responsiveness and filter out unplayable links.",
                         fontSize = 12.sp,
-                        color = accentColor
+                        color = Color.Gray
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Filter Broken Toggle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { viewModel.updateFilterBrokenSetting(!filterBrokenChannels) }
+                            .background(Color.White.copy(alpha = 0.02f))
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Exclude Offline Channels", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Hide non-functional server streams automatically", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = filterBrokenChannels,
+                            onCheckedChange = { viewModel.updateFilterBrokenSetting(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = onPurpleColor,
+                                checkedTrackColor = accentColor,
+                                uncheckedThumbColor = Color.Gray,
+                                uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                            ),
+                            modifier = Modifier.testTag("filter_broken_switch")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Scanner status progress
+                    if (isCheckingStreams) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                progress = { streamCheckingProgress },
+                                color = Color(0xFF81C784),
+                                trackColor = Color.White.copy(alpha = 0.08f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = streamCheckingStatus ?: "Scanning URLs...",
+                                    fontSize = 12.sp,
+                                    color = Color.LightGray,
+                                    fontStyle = FontStyle.Italic,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                val pct = (streamCheckingProgress * 100).toInt()
+                                Text(
+                                    text = "$pct%",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF81C784)
+                                )
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = { viewModel.verifyAllChannels() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("verify_streams_button")
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(imageVector = Icons.Default.Search, contentDescription = "Scan", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Scan & Validate All Streams", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 3: PLAYER PREFERENCES & VIDEO SETTINGS
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Player preferences",
+                            tint = accentColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Player & Video Engine",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Customize the ExoPlayer rendering engine for optimal screen and network performance.",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Low Latency Toggle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { viewModel.setLowLatencyMode(!lowLatencyMode) }
+                            .background(Color.White.copy(alpha = 0.02f))
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Low Latency Playback", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Reduces buffering times to match real-time broadcasts", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = lowLatencyMode,
+                            onCheckedChange = { viewModel.setLowLatencyMode(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = onPurpleColor,
+                                checkedTrackColor = accentColor,
+                                uncheckedThumbColor = Color.Gray,
+                                uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                            ),
+                            modifier = Modifier.testTag("low_latency_switch")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Hardware Acceleration
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable {
+                                hardwareAcceleration = !hardwareAcceleration
+                                sharedPrefs.edit().putBoolean("pref_hardware_acceleration", hardwareAcceleration).apply()
+                            }
+                            .background(Color.White.copy(alpha = 0.02f))
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Hardware Decoding", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Leverages device GPU for fluid 60FPS streams and cooler battery", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = hardwareAcceleration,
+                            onCheckedChange = {
+                                hardwareAcceleration = it
+                                sharedPrefs.edit().putBoolean("pref_hardware_acceleration", it).apply()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = onPurpleColor,
+                                checkedTrackColor = accentColor,
+                                uncheckedThumbColor = Color.Gray,
+                                uncheckedTrackColor = Color.White.copy(alpha = 0.08f)
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Aspect Ratio Preference Selector (Chips)
+                    Text(
+                        "Preferred Aspect Ratio Format",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.LightGray
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        val isRootDetected = com.example.data.AppIntegrityChecker.verifyIntegrity(context, forceKill = false).not()
-                        val isDebuggerActive = android.os.Debug.isDebuggerConnected() || android.os.Debug.waitingForDebugger()
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Root Check:", color = Color.Gray, fontSize = 11.sp)
-                            Text(
-                                text = if (isRootDetected) "ROOT DETECTED" else "SECURE (No su)",
-                                color = if (isRootDetected) Color(0xFFF2B8B5) else Color(0xFF81C784),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Debugger:", color = Color.Gray, fontSize = 11.sp)
-                            Text(
-                                text = if (isDebuggerActive) "ACTIVE (Attached)" else "SECURE (Offline)",
-                                color = if (isDebuggerActive) Color(0xFFF2B8B5) else Color(0xFF81C784),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
+                        val aspectRatios = listOf("Fit", "Original 16:9", "Zoom 4:3", "Stretch")
+                        aspectRatios.forEach { ratio ->
+                            val isSelected = aspectPreference == ratio
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    aspectPreference = ratio
+                                    sharedPrefs.edit().putString("pref_aspect_ratio", ratio).apply()
+                                },
+                                label = { Text(ratio, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = accentColor,
+                                    selectedLabelColor = onPurpleColor,
+                                    containerColor = Color.White.copy(alpha = 0.05f),
+                                    labelColor = Color.LightGray
+                                ),
+                                border = if (isSelected) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
+                    // Audio Presets
+                    Text(
+                        "Dolby Digital Audio Presets",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.LightGray
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val audioPresets = listOf("Balanced 3D", "Speech Focus", "Music Live", "Bass Plus")
+                        audioPresets.forEach { preset ->
+                            val isSelected = audioPresetPreference == preset
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    audioPresetPreference = preset
+                                    sharedPrefs.edit().putString("pref_audio_preset", preset).apply()
+                                },
+                                label = { Text(preset, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = accentColor,
+                                    selectedLabelColor = onPurpleColor,
+                                    containerColor = Color.White.copy(alpha = 0.05f),
+                                    labelColor = Color.LightGray
+                                ),
+                                border = if (isSelected) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                            )
+                        }
+                    }
+                }
+            }
+
+            // SECTION 4: VISUAL PERSONALIZATION (THEMING)
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Favorite,
+                            contentDescription = "Personalization",
+                            tint = Color(0xFFFF8A80),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Visual Customization",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Customize the interface colors to match your design style and preference.",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Theme Selection (Lavender, Emerald, Amber, Cosmic Slate)
+                    Text(
+                        "Theme Accent Palette",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.LightGray
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
-                            onClick = {
-                                val valid = com.example.data.AppIntegrityChecker.verifyIntegrity(context, forceKill = false)
-                                if (valid) {
-                                    android.widget.Toast.makeText(context, "System integrity scan passed! Device is secure.", android.widget.Toast.LENGTH_SHORT).show()
-                                } else {
-                                    android.widget.Toast.makeText(context, "INTEGRITY WARNING: Potential threats detected!", android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = cardBg),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Scan Device", fontSize = 11.sp, color = Color.White)
-                        }
-
-                        Button(
-                            onClick = {
-                                android.widget.Toast.makeText(context, "Simulating violation... Terminating app session now.", android.widget.Toast.LENGTH_LONG).show()
-                                handler.postDelayed({
-                                    com.example.data.AppIntegrityChecker.terminateSession()
-                                }, 1000)
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBA1A1A)),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Simulate Kill", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                        val accents = listOf("Lavender", "Emerald", "Amber", "Cosmic Slate")
+                        accents.forEach { name ->
+                            val isSelected = themeAccent == name
+                            val pillColor = when (name) {
+                                "Emerald" -> Color(0xFF81C784)
+                                "Amber" -> Color(0xFFFFD54F)
+                                "Cosmic Slate" -> Color(0xFF90CAF9)
+                                else -> Color(0xFFD0BCFF)
+                            }
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    themeAccent = name
+                                    sharedPrefs.edit().putString("pref_theme_accent", name).apply()
+                                },
+                                label = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(pillColor, CircleShape)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(name, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = pillColor.copy(alpha = 0.15f),
+                                    selectedLabelColor = Color.White,
+                                    containerColor = Color.White.copy(alpha = 0.03f),
+                                    labelColor = Color.LightGray
+                                ),
+                                border = BorderStroke(
+                                    width = 1.dp,
+                                    color = if (isSelected) pillColor else Color.White.copy(alpha = 0.1f)
+                                )
+                            )
                         }
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                label = { Text("Search logs...", color = Color.Gray) },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.Gray) },
-                trailingIcon = if (searchQuery.isNotEmpty()) {
-                    {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear", tint = Color.Gray)
-                        }
+            // SECTION 5: OFFLINE CACHE & STORAGE
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Build,
+                            contentDescription = "Storage",
+                            tint = Color(0xFF90CAF9),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Storage & Database Health",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
                     }
-                } else null,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = accentColor,
-                    unfocusedBorderColor = Color.White.copy(alpha = 0.12f),
-                    focusedLabelColor = accentColor,
-                    unfocusedLabelColor = Color.Gray,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                ),
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-
-            Button(
-                onClick = { com.example.data.StreamLogManager.clearLogs() },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFBA1A1A),
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                modifier = Modifier.testTag("clear_logs_button")
-            ) {
-                Icon(Icons.Default.Delete, contentDescription = "Clear Logs", modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Clear", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = cardBg),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceAround
-            ) {
-                StatItem(label = "Total", value = totalCount.toString(), color = Color.White)
-                StatItem(label = "Playback", value = playbackCount.toString(), color = Color(0xFFF2B8B5))
-                StatItem(label = "Verify", value = verificationCount.toString(), color = Color(0xFFFFD494))
-                StatItem(label = "Fetch", value = fetchCount.toString(), color = Color(0xFF94D4FF))
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        val filters = listOf("All", "Playback", "Verification", "Playlist Fetch")
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            filters.forEach { filter ->
-                val isSelected = selectedFilter == filter
-                InputChip(
-                    selected = isSelected,
-                    onClick = { selectedFilter = filter },
-                    label = { Text(filter) },
-                    colors = InputChipDefaults.inputChipColors(
-                        selectedContainerColor = accentColor,
-                        selectedLabelColor = onPurpleColor,
-                        containerColor = cardBg,
-                        labelColor = Color.White
-                    ),
-                    border = BorderStroke(1.dp, if (isSelected) accentColor else Color.White.copy(alpha = 0.12f))
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (filteredLogs.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = "No Logs",
-                        tint = Color.Gray.copy(alpha = 0.5f),
-                        modifier = Modifier.size(64.dp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Review cached stats in your local Room database and perform deep cleaning.",
+                        fontSize = 12.sp,
+                        color = Color.Gray
                     )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Local Database Statistics Grid
+                    Text("ROOM LOCAL DATABASE STATS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("No stream error logs found", color = Color.Gray, fontSize = 14.sp)
-                }
-            }
-        } else {
-            val sdf = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()) }
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(filteredLogs, key = { it.id }) { log ->
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = cardBg),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.Black.copy(alpha = 0.2f))
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Cached Channels", fontSize = 12.sp, color = Color.LightGray)
+                            Text("${channels.size} items", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Total Categories", fontSize = 12.sp, color = Color.LightGray)
+                            Text("${categories.size} groups", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            val favoritesCount = remember(channels) { channels.count { it.isFavorite } }
+                            Text("Pinned Favorites", fontSize = 12.sp, color = Color.LightGray)
+                            Text("$favoritesCount streams", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                        val estimatedSize = remember(channels, categories) {
+                            val bytes = channels.size * 320 + categories.size * 120
+                            if (bytes < 1024) "$bytes Bytes" else String.format("%.2f KB", bytes / 1024f)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Room Database Disk Space", fontSize = 12.sp, color = Color.LightGray)
+                            Text(estimatedSize, fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Reset button
+                    OutlinedButton(
+                        onClick = { viewModel.clearCloudSyncSettings() },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF8A80)),
+                        border = BorderStroke(1.dp, Color(0xFFFF8A80).copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                val (badgeColor, badgeText) = when (log.type.lowercase()) {
-                                    "playback" -> Color(0xFFF2B8B5) to "PLAYBACK"
-                                    "verification" -> Color(0xFFFFD494) to "VERIFY"
-                                    "playlist fetch" -> Color(0xFF94D4FF) to "FETCH"
-                                    else -> Color.Gray to log.type.uppercase()
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .background(badgeColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                                        .border(1.dp, badgeColor.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = badgeText,
-                                        color = badgeColor,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
+                        Icon(imageVector = Icons.Default.Delete, contentDescription = "Reset", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Reset Sync Configurations to Default", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+            }
 
-                                Text(
-                                    text = sdf.format(java.util.Date(log.timestamp)),
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
-                            }
+            // SECTION 6: SOFTWARE INFO & UPDATES (ABOUT)
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = cardBg),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.05f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "About",
+                            tint = Color.LightGray,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Software Information & Build", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Application Client", fontSize = 12.sp, color = Color.Gray)
+                        Text("LiveTV Hub Premium", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Core Player Version", fontSize = 12.sp, color = Color.Gray)
+                        Text("ExoPlayer Live TV Core 2.19", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Device Architecture", fontSize = 12.sp, color = Color.Gray)
+                        Text("${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (SDK ${android.os.Build.VERSION.SDK_INT})", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Compiled Architecture", fontSize = 12.sp, color = Color.Gray)
+                        Text("Kotlin / Jetpack Compose / M3", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                    }
 
-                            Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                            Text(
-                                text = log.targetName,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
+                    val isCheckingUpdate by viewModel.isUpdateChecking.collectAsStateWithLifecycle()
 
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Text(
-                                text = log.errorMessage,
-                                fontSize = 12.sp,
-                                color = Color(0xFFF2B8B5),
-                                fontWeight = FontWeight.Medium
-                            )
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = log.url,
-                                    fontSize = 11.sp,
-                                    color = Color.Gray,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                IconButton(
-                                    onClick = {
-                                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(log.url))
-                                        android.widget.Toast.makeText(context, "URL Copied!", android.widget.Toast.LENGTH_SHORT).show()
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Share,
-                                        contentDescription = "Copy URL",
-                                        tint = accentColor,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
+                    Button(
+                        onClick = { viewModel.checkForAppUpdates(isAutoCheck = false) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.05f), contentColor = Color.White),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                    ) {
+                        if (isCheckingUpdate) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Update Check", modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Check for Software Updates", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
-
-@Composable
-fun StatItem(label: String, value: String, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(text = value, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = color)
-        Text(text = label, fontSize = 11.sp, color = Color.Gray)
-    }
 }

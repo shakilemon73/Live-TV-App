@@ -49,6 +49,8 @@ import com.example.data.GroupedChannel
 import com.example.data.StreamSource
 import com.example.ui.ChannelViewModel
 import com.example.ui.components.VideoPlayer
+import com.example.ui.components.rememberResponsiveGridSpec
+import com.example.ui.components.ResponsiveGridSpec
 import androidx.compose.ui.draw.scale
 import kotlinx.coroutines.delay
 import android.app.Activity
@@ -78,6 +80,7 @@ fun PlayerScreen(
     onEnterPip: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val spec = rememberResponsiveGridSpec()
     val handleBack = remember(viewModel, onNavigateBack) {
         { viewModel.handleBackNavigation(onNavigateBack) }
     }
@@ -435,7 +438,7 @@ fun PlayerScreen(
 
     val categoryName = categories.find { it.id == channel.categoryId }?.name ?: "General"
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
@@ -465,7 +468,62 @@ fun PlayerScreen(
                     }
                 )
             }
+            .pointerInput(Unit) {
+                var dragType = 0 // 0 = none, 1 = brightness (left edge), 2 = volume (right edge)
+                detectVerticalDragGestures(
+                    onDragStart = { offset ->
+                        val width = size.width
+                        if (offset.x < width * 0.35f) {
+                            dragType = 1
+                            showBrightnessIndicator = true
+                        } else if (offset.x > width * 0.65f) {
+                            dragType = 2
+                            showVolumeIndicator = true
+                        } else {
+                            dragType = 0
+                        }
+                    },
+                    onDragEnd = {
+                        showBrightnessIndicator = false
+                        showVolumeIndicator = false
+                    },
+                    onDragCancel = {
+                        showBrightnessIndicator = false
+                        showVolumeIndicator = false
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        if (dragType != 0) {
+                            change.consume()
+                            val sensitivity = 500f
+                            val delta = -dragAmount / sensitivity
+                            if (dragType == 1) {
+                                brightness = (brightness + delta).coerceIn(0.01f, 1.0f)
+                                showBrightnessIndicator = true
+                            } else if (dragType == 2) {
+                                volumeFloat = (volumeFloat + delta).coerceIn(0.0f, 1.0f)
+                                showVolumeIndicator = true
+                            }
+                        }
+                    }
+                )
+            }
     ) {
+        val screenWidth = maxWidth
+        val screenHeight = maxHeight
+        val isShortScreen = screenHeight < 400.dp
+        val isNarrowScreen = screenWidth < 500.dp
+
+        val buttonSize = if (isNarrowScreen) 40.dp else 52.dp
+        val playButtonSize = if (isNarrowScreen) 56.dp else 76.dp
+        val iconSize = if (isNarrowScreen) 18.dp else 22.dp
+        val playIconSize = if (isNarrowScreen) 28.dp else 36.dp
+        val controlSpacing = if (isNarrowScreen) 10.dp else 20.dp
+        val indicatorPadding = if (isNarrowScreen) 40.dp else 80.dp
+
+        val sliderWidth = if (isShortScreen) 36.dp else 44.dp
+        val sliderHeight = if (isShortScreen) 130.dp else 200.dp
+        val sliderPadding = if (isShortScreen) 12.dp else 24.dp
+
         // High-Fidelity Custom Video Player
         VideoPlayer(
             videoUrl = currentStreamUrl ?: channel.streamUrl,
@@ -521,30 +579,6 @@ fun PlayerScreen(
             )
         }
 
-        // Left-side vertical gesture-based brightness control zone
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(0.35f)
-                .align(Alignment.CenterStart)
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onDragStart = {
-                            showBrightnessIndicator = true
-                        },
-                        onDragEnd = {},
-                        onDragCancel = {},
-                        onVerticalDrag = { change, dragAmount ->
-                            change.consume()
-                            val sensitivity = 500f
-                            val delta = -dragAmount / sensitivity
-                            brightness = (brightness + delta).coerceIn(0.01f, 1.0f)
-                            showBrightnessIndicator = true
-                        }
-                    )
-                }
-        )
-
         // Vertical Brightness Slider Overlay on the left side
         AnimatedVisibility(
             visible = (showBrightnessIndicator || (showControls && !isInPipMode)) && !isInPipMode,
@@ -552,40 +586,19 @@ fun PlayerScreen(
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = 24.dp)
+                .padding(start = sliderPadding)
         ) {
             VerticalBrightnessSlider(
                 brightness = brightness,
                 onBrightnessChange = {
                     brightness = it
                     showBrightnessIndicator = true
-                }
+                },
+                modifier = Modifier
+                    .width(sliderWidth)
+                    .height(sliderHeight)
             )
         }
-
-        // Right-side vertical gesture-based volume control zone
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(0.35f)
-                .align(Alignment.CenterEnd)
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onDragStart = {
-                            showVolumeIndicator = true
-                        },
-                        onDragEnd = {},
-                        onDragCancel = {},
-                        onVerticalDrag = { change, dragAmount ->
-                            change.consume()
-                            val sensitivity = 500f
-                            val delta = -dragAmount / sensitivity
-                            volumeFloat = (volumeFloat + delta).coerceIn(0.0f, 1.0f)
-                            showVolumeIndicator = true
-                        }
-                    )
-                }
-        )
 
         // Vertical Volume Slider Overlay on the right side
         AnimatedVisibility(
@@ -594,16 +607,20 @@ fun PlayerScreen(
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 24.dp)
+                .padding(end = sliderPadding)
         ) {
             VerticalVolumeSlider(
                 volume = volumeFloat,
                 onVolumeChange = {
                     volumeFloat = it
                     showVolumeIndicator = true
-                }
+                },
+                modifier = Modifier
+                    .width(sliderWidth)
+                    .height(sliderHeight)
             )
         }
+
 
         // Double-Tap Seek Indicators
         // Left (Rewind) Indicator
@@ -613,7 +630,7 @@ fun PlayerScreen(
             exit = fadeOut(animationSpec = tween(150)),
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = 80.dp)
+                .padding(start = indicatorPadding)
         ) {
             Box(
                 modifier = Modifier
@@ -647,7 +664,7 @@ fun PlayerScreen(
             exit = fadeOut(animationSpec = tween(150)),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 80.dp)
+                .padding(end = indicatorPadding)
         ) {
             Box(
                 modifier = Modifier
@@ -692,32 +709,42 @@ fun PlayerScreen(
                         )
                     )
                     .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .padding(horizontal = 24.dp, vertical = 12.dp)
+                    .padding(vertical = if (isNarrowScreen) 8.dp else 12.dp),
+                contentAlignment = Alignment.Center
             ) {
+                val widthModifier = if (spec.maxContentWidth != androidx.compose.ui.unit.Dp.Unspecified) {
+                    Modifier.widthIn(max = spec.maxContentWidth)
+                } else {
+                    Modifier.fillMaxWidth()
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = widthModifier
+                        .fillMaxWidth()
+                        .padding(horizontal = spec.margin)
                 ) {
                     IconButton(
                         onClick = handleBack,
                         modifier = Modifier
                             .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
                             .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50))
+                            .size(if (isNarrowScreen) 40.dp else 48.dp)
                             .testTag("player_back_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.ArrowBack,
                             contentDescription = "Back",
-                            tint = Color.White
+                            tint = Color.White,
+                            modifier = Modifier.size(if (isNarrowScreen) 18.dp else 24.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(16.dp))
+                    Spacer(modifier = Modifier.width(if (isNarrowScreen) 8.dp else 16.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = channel.name,
-                            fontSize = 20.sp,
+                            fontSize = if (isNarrowScreen) 16.sp else 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
                             maxLines = 1,
@@ -729,7 +756,7 @@ fun PlayerScreen(
                             val endTimeStr = remember(currentEpgProgram) { timeSdf.format(java.util.Date(currentEpgProgram!!.endTime)) }
                             Text(
                                 text = "${currentEpgProgram!!.title} ($startTimeStr - $endTimeStr)",
-                                fontSize = 13.sp,
+                                fontSize = if (isNarrowScreen) 11.sp else 13.sp,
                                 fontWeight = FontWeight.Normal,
                                 color = Color(0xFFD0BCFF),
                                 maxLines = 1,
@@ -743,26 +770,26 @@ fun PlayerScreen(
                         ) {
                             // Pulsating Live Badge
                             PulsatingLiveIndicator()
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(if (isNarrowScreen) 4.dp else 8.dp))
                             Text(
                                 text = categoryName.uppercase(),
-                                fontSize = 11.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFFD0BCFF),
                                 letterSpacing = 0.5.sp
                             )
 
                             if (!currentStreamName.isNullOrEmpty()) {
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(if (isNarrowScreen) 4.dp else 8.dp))
                                 Text(
                                     text = "•",
                                     fontSize = 11.sp,
                                     color = Color.White.copy(alpha = 0.5f)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(if (isNarrowScreen) 4.dp else 8.dp))
                                 Text(
                                     text = currentStreamName!!.uppercase(),
-                                    fontSize = 11.sp,
+                                    fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color(0xFF81C784),
                                     letterSpacing = 0.5.sp
@@ -772,13 +799,13 @@ fun PlayerScreen(
                             // Show recording indicator if recording
                             val isThisChannelRecording = isRecording && recordingChannelId == channel.id
                             if (isThisChannelRecording) {
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(if (isNarrowScreen) 4.dp else 8.dp))
                                 Text(
                                     text = "•",
                                     fontSize = 11.sp,
                                     color = Color.White.copy(alpha = 0.5f)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(if (isNarrowScreen) 4.dp else 8.dp))
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
@@ -795,7 +822,7 @@ fun PlayerScreen(
                                     Text(
                                         text = "REC $formattedDuration",
                                         color = Color(0xFFFF5252),
-                                        fontSize = 9.sp,
+                                        fontSize = 8.sp,
                                         fontWeight = FontWeight.ExtraBold,
                                         letterSpacing = 0.5.sp
                                     )
@@ -805,58 +832,60 @@ fun PlayerScreen(
 
                     }
 
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(if (isNarrowScreen) 8.dp else 12.dp))
 
-                    // PiP Button
-                    IconButton(
-                        onClick = onEnterPip,
-                        modifier = Modifier
-                            .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
-                            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50))
-                            .testTag("player_pip_button")
-                    ) {
-                        Box(
+                    if (!isNarrowScreen) {
+                        // PiP Button
+                        IconButton(
+                            onClick = onEnterPip,
                             modifier = Modifier
-                                .size(20.dp)
-                                .border(1.5.dp, Color.White, RoundedCornerShape(2.dp))
-                                .padding(2.dp)
+                                .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
+                                .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50))
+                                .testTag("player_pip_button")
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(8.dp)
-                                    .background(Color.White, RoundedCornerShape(1.dp))
-                                    .align(Alignment.BottomEnd)
+                                    .size(20.dp)
+                                    .border(1.5.dp, Color.White, RoundedCornerShape(2.dp))
+                                    .padding(2.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(Color.White, RoundedCornerShape(1.dp))
+                                        .align(Alignment.BottomEnd)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        // Rotation Lock Toggle Button
+                        IconButton(
+                            onClick = { isRotationLocked = !isRotationLocked },
+                            modifier = Modifier
+                                .background(
+                                    if (isRotationLocked) Color(0xFFD0BCFF).copy(alpha = 0.25f)
+                                    else Color.White.copy(alpha = 0.12f),
+                                    RoundedCornerShape(50)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isRotationLocked) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.18f),
+                                    RoundedCornerShape(50)
+                                )
+                                .testTag("player_rotation_lock_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isRotationLocked) Icons.Default.Lock else Icons.Default.Refresh,
+                                contentDescription = "Rotation Lock",
+                                tint = if (isRotationLocked) Color(0xFFD0BCFF) else Color.White,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
+
+                        Spacer(modifier = Modifier.width(12.dp))
                     }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    // Rotation Lock Toggle Button
-                    IconButton(
-                        onClick = { isRotationLocked = !isRotationLocked },
-                        modifier = Modifier
-                            .background(
-                                if (isRotationLocked) Color(0xFFD0BCFF).copy(alpha = 0.25f)
-                                else Color.White.copy(alpha = 0.12f),
-                                RoundedCornerShape(50)
-                            )
-                            .border(
-                                1.dp,
-                                if (isRotationLocked) Color(0xFFD0BCFF) else Color.White.copy(alpha = 0.18f),
-                                RoundedCornerShape(50)
-                            )
-                            .testTag("player_rotation_lock_button")
-                    ) {
-                        Icon(
-                            imageVector = if (isRotationLocked) Icons.Default.Lock else Icons.Default.Refresh,
-                            contentDescription = "Rotation Lock",
-                            tint = if (isRotationLocked) Color(0xFFD0BCFF) else Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
 
                     // Stream Selector Dropdown Menu
                     if (groupedChannel != null && groupedChannel.streams.size > 1) {
@@ -866,13 +895,14 @@ fun PlayerScreen(
                                 modifier = Modifier
                                     .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
                                     .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50))
+                                    .size(if (isNarrowScreen) 40.dp else 48.dp)
                                     .testTag("player_streams_dropdown_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.List,
                                     contentDescription = "Switch Server/Source",
                                     tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(if (isNarrowScreen) 18.dp else 20.dp)
                                 )
                             }
 
@@ -922,7 +952,7 @@ fun PlayerScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Spacer(modifier = Modifier.width(if (isNarrowScreen) 8.dp else 12.dp))
                     }
 
                     // Stream Settings Button (Unified Quality, Aspect, Favorite, Recording, Rotate)
@@ -931,13 +961,14 @@ fun PlayerScreen(
                         modifier = Modifier
                             .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(50))
                             .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(50))
+                            .size(if (isNarrowScreen) 40.dp else 48.dp)
                             .testTag("player_settings_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Stream Settings",
                             tint = Color.White,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(if (isNarrowScreen) 18.dp else 20.dp)
                         )
                     }
                 }
@@ -952,13 +983,13 @@ fun PlayerScreen(
             modifier = Modifier.align(Alignment.Center)
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                horizontalArrangement = Arrangement.spacedBy(controlSpacing),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 1. Mute/Unmute toggle (Volume Icon)
                 Box(
                     modifier = Modifier
-                        .size(52.dp)
+                        .size(buttonSize)
                         .background(Color.Black.copy(alpha = 0.5f), CircleShape)
                         .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                         .clickable { isMuted = !isMuted }
@@ -969,14 +1000,14 @@ fun PlayerScreen(
                         imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                         contentDescription = if (isMuted) "Unmute" else "Mute",
                         tint = Color.White,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(iconSize)
                     )
                 }
 
                 // 2. Seek Backward 10s button
                 Box(
                     modifier = Modifier
-                        .size(52.dp)
+                        .size(buttonSize)
                         .background(Color.Black.copy(alpha = 0.5f), CircleShape)
                         .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                         .clickable {
@@ -995,7 +1026,7 @@ fun PlayerScreen(
                             contentDescription = "Seek Backward 10s",
                             tint = Color.White,
                             modifier = Modifier
-                                .size(18.dp)
+                                .size(if (isNarrowScreen) 14.dp else 18.dp)
                                 .graphicsLayer(scaleX = -1f) // Flip horizontally for reverse direction
                         )
                         Spacer(modifier = Modifier.height(2.dp))
@@ -1011,8 +1042,8 @@ fun PlayerScreen(
                 // 3. Main Play/Pause Button
                 Box(
                     modifier = Modifier
-                        .size(76.dp)
-                        .background(Color.White, CircleShape) // Ultra-premium pure white play circle
+                        .size(playButtonSize)
+                        .background(Color.White, CircleShape) // Ultra-premium play circle
                         .clickable { isPlaying = !isPlaying }
                         .testTag("player_play_pause_button"),
                     contentAlignment = Alignment.Center
@@ -1020,15 +1051,15 @@ fun PlayerScreen(
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = Color.Black, // High contrast black on white is highly premium
-                        modifier = Modifier.size(36.dp)
+                        tint = Color.Black,
+                        modifier = Modifier.size(playIconSize)
                     )
                 }
 
                 // 4. Seek Forward 10s button
                 Box(
                     modifier = Modifier
-                        .size(52.dp)
+                        .size(buttonSize)
                         .background(Color.Black.copy(alpha = 0.5f), CircleShape)
                         .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                         .clickable {
@@ -1047,7 +1078,7 @@ fun PlayerScreen(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = "Seek Forward 10s",
                             tint = Color.White,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(if (isNarrowScreen) 14.dp else 18.dp)
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
@@ -1062,7 +1093,7 @@ fun PlayerScreen(
                 // 5. Info / Description toggle button
                 Box(
                     modifier = Modifier
-                        .size(52.dp)
+                        .size(buttonSize)
                         .background(
                             if (showDescriptionCard) Color.White.copy(alpha = 0.2f)
                             else Color.Black.copy(alpha = 0.5f),
@@ -1081,7 +1112,7 @@ fun PlayerScreen(
                         imageVector = Icons.Default.Info,
                         contentDescription = "Toggle Description",
                         tint = Color.White,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(iconSize)
                     )
                 }
             }
@@ -1103,17 +1134,23 @@ fun PlayerScreen(
                         )
                     )
                     .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .padding(bottom = 8.dp)
+                    .padding(bottom = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                val widthModifier = if (spec.maxContentWidth != androidx.compose.ui.unit.Dp.Unspecified) {
+                    Modifier.widthIn(max = spec.maxContentWidth)
+                } else {
+                    Modifier.fillMaxWidth()
+                }
                 // QUICK SWITCH DRAWER (Horizontal channel line-up)
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
+                    modifier = widthModifier.fillMaxWidth()
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = spec.margin)
                     ) {
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
@@ -1145,8 +1182,8 @@ fun PlayerScreen(
                             label = "shimmer_alpha"
                         )
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(spec.gutter),
+                            contentPadding = PaddingValues(horizontal = spec.margin, vertical = 4.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             items(5, contentType = { "recommended_skeleton" }) {
@@ -1192,8 +1229,8 @@ fun PlayerScreen(
                     } else {
                         LazyRow(
                             state = lazyListState,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(spec.gutter),
+                            contentPadding = PaddingValues(horizontal = spec.margin, vertical = 4.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             items(
@@ -1293,15 +1330,15 @@ fun PlayerScreen(
                         )
                         .fillMaxWidth()
                         .windowInsetsPadding(WindowInsets.safeDrawing)
-                        .padding(16.dp)
+                        .padding(if (isShortScreen) 8.dp else 16.dp)
                         .widthIn(max = 600.dp)
-                        .heightIn(max = 340.dp),
+                        .heightIn(max = screenHeight - 32.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF1D1B20)),
                     border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp)
+                        modifier = Modifier.padding(if (isShortScreen) 12.dp else 20.dp)
                     ) {
                         // Header (Fixed)
                         Row(
@@ -1464,7 +1501,7 @@ fun PlayerScreen(
 
                         Spacer(modifier = Modifier.height(20.dp))
 
-                        // Action buttons (Record & Favorite)
+                        // Action buttons (Record, Favorite & PiP)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1489,9 +1526,11 @@ fun PlayerScreen(
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
+                            val actionTextSize = if (isNarrowScreen) 11.sp else 13.sp
+
                             // Favorite toggle
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1514,14 +1553,16 @@ fun PlayerScreen(
                                     imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                                     contentDescription = "Favorite",
                                     tint = if (channel.isFavorite) Color(0xFFD0BCFF) else Color.White,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (channel.isFavorite) "Favorited" else "Favorite",
                                     color = if (channel.isFavorite) Color(0xFFD0BCFF) else Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontSize = actionTextSize,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
 
@@ -1552,23 +1593,63 @@ fun PlayerScreen(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(8.dp)
+                                        .size(if (isThisChannelRecording) 6.dp else 8.dp)
                                         .background(
                                             if (isThisChannelRecording) Color(0xFFFF5252) else Color.White,
                                             if (isThisChannelRecording) RoundedCornerShape(2.dp) else CircleShape
                                         )
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (isThisChannelRecording) "Stop REC" else "Record Stream",
+                                    text = if (isThisChannelRecording) "Stop REC" else "Record",
                                     color = if (isThisChannelRecording) Color(0xFFFF5252) else Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontSize = actionTextSize,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            // PiP Mode action button
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        showSettingsSheet = false
+                                        onEnterPip()
+                                    }
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .border(1.5.dp, Color.White, RoundedCornerShape(2.dp))
+                                        .padding(2.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(Color.White, RoundedCornerShape(1.dp))
+                                            .align(Alignment.BottomEnd)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "PiP Mode",
+                                    color = Color.White,
+                                    fontSize = actionTextSize,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Spacer(modifier = Modifier.height(if (isShortScreen) 12.dp else 20.dp))
 
                         // Low Latency Config Row
                         Row(

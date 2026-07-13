@@ -102,9 +102,46 @@ class ChannelViewModel(
 
     private val _selectedCategoryId = MutableStateFlow<Int?>(null) // null means 'All'
     val selectedCategoryId: StateFlow<Int?> = _selectedCategoryId.asStateFlow()
+    private var lastSelectedCategoryName: String? = null
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    private fun getListFromPrefs(key: String): List<String> {
+        val jsonStr = prefs.getString(key, null) ?: return emptyList()
+        return try {
+            val jsonArray = org.json.JSONArray(jsonStr)
+            val list = mutableListOf<String>()
+            for (i in 0 until jsonArray.length()) {
+                list.add(jsonArray.getString(i))
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveListToPrefs(key: String, list: List<String>) {
+        try {
+            val jsonArray = org.json.JSONArray()
+            list.forEach { jsonArray.put(it) }
+            prefs.edit().putString(key, jsonArray.toString()).apply()
+        } catch (e: Exception) {
+            // ignore
+        }
+    }
+
+    private val _searchHistory = MutableStateFlow<List<String>>(getListFromPrefs("search_history_queries"))
+    val searchHistory: StateFlow<List<String>> = _searchHistory.asStateFlow()
+
+    private val _recentSearchChannelNames = MutableStateFlow<List<String>>(getListFromPrefs("search_history_channels"))
+    val recentSearchChannelNames: StateFlow<List<String>> = _recentSearchChannelNames.asStateFlow()
+
+    // Advanced search filter states
+    val searchFilterWorkingOnly = MutableStateFlow(false)
+    val searchFilterFavoritesOnly = MutableStateFlow(false)
+    val searchFilterWithEpgOnly = MutableStateFlow(false)
+    val searchFilterCategoryId = MutableStateFlow<Int?>(null)
 
     private val _selectedChannel = MutableStateFlow<ChannelEntity?>(null)
     val selectedChannel: StateFlow<ChannelEntity?> = _selectedChannel.asStateFlow()
@@ -268,7 +305,7 @@ class ChannelViewModel(
     // --- Cloud Sync / SharedPreferences States ---
 
     companion object {
-        const val INTERNAL_M3U_URL = "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u"
+        const val INTERNAL_M3U_URL = "https://iptv-api-worker.shakilemon71.workers.dev/api/channels"
     }
 
     private val _cloudGistUrl = MutableStateFlow(prefs.getString("cloud_gist_url", INTERNAL_M3U_URL) ?: INTERNAL_M3U_URL)
@@ -585,6 +622,17 @@ class ChannelViewModel(
     }
 
     init {
+        // Auto-migrate old playlist URLs to secure Cloudflare Worker URL
+        val currentSavedUrl = _cloudGistUrl.value
+        if (currentSavedUrl.contains("github.com") ||
+            currentSavedUrl.contains("iptv-org") ||
+            currentSavedUrl.isBlank() ||
+            currentSavedUrl.equals("default", ignoreCase = true) ||
+            currentSavedUrl.equals("all", ignoreCase = true)) {
+            _cloudGistUrl.value = INTERNAL_M3U_URL
+            prefs.edit().putString("cloud_gist_url", INTERNAL_M3U_URL).apply()
+        }
+
         // Initialize dynamic network connection monitor
         try {
             val cm = application.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -609,6 +657,22 @@ class ChannelViewModel(
             _isOnline.value = true
         }
 
+        // Remap selected category ID to the new ID if categories change (e.g. after database refresh/sync)
+        viewModelScope.launch {
+            categories.collect { list ->
+                val name = lastSelectedCategoryName
+                if (name != null) {
+                    val newCategory = list.find { it.name.equals(name, ignoreCase = true) }
+                    if (newCategory != null) {
+                        _selectedCategoryId.value = newCategory.id
+                    } else {
+                        _selectedCategoryId.value = null
+                        lastSelectedCategoryName = null
+                    }
+                }
+            }
+        }
+
         viewModelScope.launch {
             // Load cached live events for instant startup display
             launch(Dispatchers.IO) {
@@ -623,29 +687,25 @@ class ChannelViewModel(
             }
 
             _localIsLoading.value = true
-            // Seed defaults on start if DB is empty
-            repository.seedDatabaseIfEmpty()
-            // Set the first category as default selected (or keep as All / null)
-            val initialCats = repository.allCategories.first()
-            if (initialCats.isNotEmpty()) {
-                _selectedCategoryId.value = null // Start with 'All'
+            // Seed defaults on start if DB is empty so the user sees channels instantly
+            withContext(Dispatchers.IO) {
+                repository.seedDatabaseIfEmpty()
             }
+            // Set the default category selection — 'All' shows everything
+            _selectedCategoryId.value = null
             _localIsLoading.value = false
-
-            // Safely wait for channel list loading so the verify check has data
-            try {
-                kotlinx.coroutines.withTimeout(2000) {
-                    channels.filter { it.isNotEmpty() }.first()
-                }
-            } catch (e: Exception) {
-                // Proceed if timeout occurs
-            }
 
             // Check if there's an interrupted scan process to resume first
             val isInterrupted = prefs.getBoolean("is_scanning_interrupted", false)
             if (isInterrupted) {
-                _localSyncStatusMessage.value = "Resuming interrupted channel scanning..."
-                verifyAllChannels()
+                // Clear the interrupted flag immediately — an infinite loop of full scans
+                // on each launch is the worst possible UX. Use targeted Worker batch re-check instead.
+                prefs.edit().putBoolean("is_scanning_interrupted", false).apply()
+                _localSyncStatusMessage.value = "Re-checking broken channels via cloud..."
+                // Launch non-blocking so the UI remains responsive
+                viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    syncManager.verifyBrokenChannelsViaWorker()
+                }
             } else if (_autoSyncOnLaunch.value) {
                 val lastSyncedUrl = prefs.getString("last_synced_m3u_url", "") ?: ""
                 val currentUrl = _cloudGistUrl.value
@@ -653,14 +713,20 @@ class ChannelViewModel(
                 val existingChannels = repository.allChannels.first()
 
                 if (existingChannels.isEmpty() || isUrlChanged) {
+                    // Empty DB or URL changed — force a full sync
                     syncWithCloudGist(force = true)
                 } else {
-                    // Lazy verification model: do NOT run intensive stream check on startup.
-                    // Verification is deferred until playback or manual user request.
-                    android.util.Log.i("ChannelViewModel", "Startup check bypassed: Lazy model active. Defers to playback/user-action validation.")
+                    // DB populated and URL same — do a lightweight delta check.
+                    // syncWithCloudGist uses ?since= so it only downloads if Worker reports changes.
+                    // Then calls verifyBrokenChannelsViaWorker() for targeted broken-channel re-check.
+                    syncWithCloudGist(force = false)
                 }
             } else {
-                // Manual sync/lazy active; do not auto-run full verification on start
+                // Manual sync/lazy active; seed fallback data only if DB is completely empty
+                val existingChannels = repository.allChannels.first()
+                if (existingChannels.isEmpty()) {
+                    repository.seedDatabaseIfEmpty()
+                }
                 android.util.Log.i("ChannelViewModel", "Startup check bypassed: Auto-sync disabled.")
             }
 
@@ -926,10 +992,69 @@ class ChannelViewModel(
     // --- Selection Setters ---
     fun selectCategory(categoryId: Int?) {
         _selectedCategoryId.value = categoryId
+        if (categoryId != null) {
+            val list = categories.value
+            lastSelectedCategoryName = list.find { it.id == categoryId }?.name
+        } else {
+            lastSelectedCategoryName = null
+        }
     }
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
+    }
+
+    fun addSearchQueryToHistory(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return
+        val current = _searchHistory.value.toMutableList()
+        current.remove(trimmed)
+        current.add(0, trimmed)
+        val truncated = current.take(15)
+        _searchHistory.value = truncated
+        saveListToPrefs("search_history_queries", truncated)
+    }
+
+    fun removeSearchQueryFromHistory(query: String) {
+        val current = _searchHistory.value.toMutableList()
+        if (current.remove(query)) {
+            _searchHistory.value = current
+            saveListToPrefs("search_history_queries", current)
+        }
+    }
+
+    fun clearSearchHistory() {
+        _searchHistory.value = emptyList()
+        saveListToPrefs("search_history_queries", emptyList())
+    }
+
+    fun addChannelToSearchHistory(channelName: String) {
+        val current = _recentSearchChannelNames.value.toMutableList()
+        current.remove(channelName)
+        current.add(0, channelName)
+        val truncated = current.take(10)
+        _recentSearchChannelNames.value = truncated
+        saveListToPrefs("search_history_channels", truncated)
+    }
+
+    fun removeChannelFromSearchHistory(channelName: String) {
+        val current = _recentSearchChannelNames.value.toMutableList()
+        if (current.remove(channelName)) {
+            _recentSearchChannelNames.value = current
+            saveListToPrefs("search_history_channels", current)
+        }
+    }
+
+    fun clearRecentSearchChannels() {
+        _recentSearchChannelNames.value = emptyList()
+        saveListToPrefs("search_history_channels", emptyList())
+    }
+
+    fun resetSearchFilters() {
+        searchFilterWorkingOnly.value = false
+        searchFilterFavoritesOnly.value = false
+        searchFilterWithEpgOnly.value = false
+        searchFilterCategoryId.value = null
     }
 
     fun resetToCuratedStreams() {
@@ -1018,9 +1143,10 @@ class ChannelViewModel(
             val failures = (channelFailuresMap[channelId] ?: 0) + 1
             channelFailuresMap[channelId] = failures
             val errorRate = getChannelErrorRate(channelId)
-            android.util.Log.i("LiveTvTelemetry", "Playback failure registered for channel $channelId. Failures: $failures, Error Rate: ${"%.2f".format(errorRate * 100)}% [URL: $failedUrl]")
+            val maskedFailedUrl = com.example.data.StreamDecryptionUtility.maskUrl(failedUrl)
+            android.util.Log.i("LiveTvTelemetry", "Playback failure registered for channel $channelId. Failures: $failures, Error Rate: ${"%.2f".format(errorRate * 100)}% [URL: $maskedFailedUrl]")
             
-            android.util.Log.d("ChannelViewModel", "Playback error on $failedUrl, consecutive count: $count")
+            android.util.Log.d("ChannelViewModel", "Playback error on $maskedFailedUrl, consecutive count: $count")
 
             if (count >= 3) {
                 val allChs = channels.value
@@ -1153,26 +1279,35 @@ class ChannelViewModel(
             _isEventsLoading.value = true
             _eventsError.value = null
             
-            val combinedParsedChannels = withContext(Dispatchers.IO) {
-                val deferred1 = async { com.example.data.M3uParserService.fetchM3uContent("https://github.com/doms9/iptv/raw/refs/heads/default/M3U8/events.m3u8") }
-                val deferred2 = async { com.example.data.M3uParserService.fetchM3uContent("https://github.com/shakilemon73/my-m3u-playlist/raw/refs/heads/main/channel_list/live-event.m3u") }
-                val content1 = deferred1.await()
-                val content2 = deferred2.await()
-                
-                val list = mutableListOf<com.example.data.M3uParserService.ParsedChannel>()
-                if (content1 != null) {
-                    list.addAll(com.example.data.M3uParserService.parseM3uText(content1))
+            val grouped = withContext(Dispatchers.IO) {
+                try {
+                    val workerUrl = "https://iptv-api-worker.shakilemon71.workers.dev/api/events"
+                    val request = okhttp3.Request.Builder().url(workerUrl).build()
+                    val client = com.example.data.CachedHttpClient.getBaseClient()
+                    client.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val body = response.body?.string()
+                            if (!body.isNullOrBlank()) {
+                                val moshi = com.squareup.moshi.Moshi.Builder()
+                                    .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+                                    .build()
+                                val type = com.squareup.moshi.Types.newParameterizedType(List::class.java, com.example.data.GroupedEvent::class.java)
+                                val adapter = moshi.adapter<List<com.example.data.GroupedEvent>>(type)
+                                adapter.fromJson(body) ?: emptyList()
+                            } else {
+                                emptyList()
+                            }
+                        } else {
+                            emptyList()
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    emptyList()
                 }
-                if (content2 != null) {
-                    list.addAll(com.example.data.M3uParserService.parseM3uText(content2))
-                }
-                list
             }
             
-            if (combinedParsedChannels.isNotEmpty()) {
-                val grouped = withContext(Dispatchers.Default) {
-                    com.example.data.LiveEventParser.mapParsedChannelsToGroupedEvents(combinedParsedChannels)
-                }
+            if (grouped.isNotEmpty()) {
                 _fetchedLiveEvents.value = grouped
                 
                 // Save to Room cache
@@ -1190,7 +1325,7 @@ class ChannelViewModel(
                 }
             } else {
                 if (liveEvents.value.isEmpty()) {
-                    _eventsError.value = "Failed to load dynamic event schedule. Please verify your connection."
+                    _eventsError.value = "Failed to load secure event schedule. Please verify your connection."
                 }
             }
             _isEventsLoading.value = false

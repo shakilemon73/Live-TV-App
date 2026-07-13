@@ -31,6 +31,39 @@ object StreamDecryptionUtility {
         0xBA.toByte(), 0x09.toByte(), 0x87.toByte(), 0x65.toByte()
     )
 
+    fun maskUrl(url: String): String {
+        if (url.isBlank()) return ""
+        if (url.startsWith("encrypted://") && !url.contains("/")) {
+            return "encrypted://[MASKED]"
+        }
+        val cleanUrl = if (url.startsWith("encrypted://")) {
+            // If we can decrypt it, do so, but don't log the decrypted result in plain text!
+            val decrypted = try {
+                decrypt(url)
+            } catch (e: Exception) {
+                ""
+            }
+            if (decrypted.isNotBlank()) decrypted else url
+        } else {
+            url
+        }
+        return try {
+            val uri = java.net.URI(cleanUrl.split("|")[0])
+            val scheme = uri.scheme ?: "http"
+            val host = uri.host ?: "unknown"
+            val path = uri.path ?: ""
+            val lastSegment = path.substringAfterLast('/', "")
+            val maskedLast = if (lastSegment.length > 4) {
+                "..." + lastSegment.takeLast(4)
+            } else {
+                "..."
+            }
+            "$scheme://$host/.../$maskedLast"
+        } catch (e: Exception) {
+            if (cleanUrl.length > 15) cleanUrl.take(15) + "..." else "..."
+        }
+    }
+
     /**
      * Initializes the key from persistent SharedPreferences or BuildConfig fallback.
      */
@@ -102,23 +135,64 @@ object StreamDecryptionUtility {
     }
 
     /**
-     * Decrypts an encrypted token using the currently active AES key.
+     * Decrypts an encrypted token using the currently active AES key, with automatic fallbacks for key mismatches.
      */
     fun decrypt(token: String, context: Context? = null): String {
         if (!token.startsWith("encrypted://")) return token
         val cipherText = token.removePrefix("encrypted://")
-        return try {
-            val keySpec = SecretKeySpec(getKeyBytes(context), "AES")
-            val ivSpec = IvParameterSpec(ivBytes)
-            val cipher = Cipher.getInstance(ALGORITHM)
-            cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
-            val decoded = Base64.decode(cipherText, Base64.NO_WRAP or Base64.URL_SAFE)
-            val decrypted = cipher.doFinal(decoded)
-            String(decrypted, StandardCharsets.UTF_8)
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "Decryption error", e)
-            token
+        
+        val candidateKeys = mutableListOf<String>()
+        val activeKey = loadKeyString(context)
+        candidateKeys.add(activeKey)
+        
+        val stdFallback = "Secr3tM3u8Str3am"
+        if (stdFallback !in candidateKeys) {
+            candidateKeys.add(stdFallback)
         }
+        
+        val varFallback = "ecr3tM3u8Str3a"
+        if (varFallback !in candidateKeys) {
+            candidateKeys.add(varFallback)
+        }
+
+        val decoded = try {
+            Base64.decode(cipherText, Base64.NO_WRAP or Base64.URL_SAFE)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Base64 decode failure for token: $token", e)
+            return token
+        }
+
+        for (key in candidateKeys) {
+            try {
+                val keyBytes = if (key.toByteArray(StandardCharsets.UTF_8).size >= 16) {
+                    key.toByteArray(StandardCharsets.UTF_8).copyOf(16)
+                } else {
+                    val padded = ByteArray(16)
+                    val b = key.toByteArray(StandardCharsets.UTF_8)
+                    System.arraycopy(b, 0, padded, 0, b.size)
+                    padded
+                }
+                val keySpec = SecretKeySpec(keyBytes, "AES")
+                val ivSpec = IvParameterSpec(ivBytes)
+                val cipher = Cipher.getInstance(ALGORITHM)
+                cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
+                val decrypted = cipher.doFinal(decoded)
+                val decryptedStr = String(decrypted, StandardCharsets.UTF_8)
+                if (decryptedStr.startsWith("http://") || 
+                    decryptedStr.startsWith("https://") || 
+                    decryptedStr.startsWith("rtmp") || 
+                    decryptedStr.startsWith("rtsp") ||
+                    decryptedStr.contains("|")
+                ) {
+                    return decryptedStr
+                }
+            } catch (e: Exception) {
+                // Try the next key
+            }
+        }
+        
+        android.util.Log.e(TAG, "All decryption attempts failed for token: $token")
+        return token
     }
 
     /**

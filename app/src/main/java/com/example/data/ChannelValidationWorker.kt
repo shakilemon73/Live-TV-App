@@ -24,15 +24,26 @@ class ChannelValidationWorker(
             val syncManager = app.syncManager
 
             val prefs = applicationContext.getSharedPreferences("live_tv_prefs", Context.MODE_PRIVATE)
-            val cloudGistUrl = prefs.getString("cloud_gist_url", "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u") ?: "https://github.com/abusaeeidx/Mrgify-BDIX-IPTV/raw/main/playlist.m3u"
+            val defaultUrl = "https://iptv-api-worker.shakilemon71.workers.dev/api/channels"
+            val cloudGistUrl = prefs.getString("cloud_gist_url", defaultUrl) ?: defaultUrl
             val autoSync = prefs.getBoolean("auto_sync_on_launch", true)
 
+            // Guard: skip if the app itself did a sync in the last 30 minutes
+            // (prevents double-work when the WorkManager fires right after app launch)
+            val lastSyncTime = prefs.getLong("last_sync_time", 0L)
+            val msSinceLastSync = System.currentTimeMillis() - lastSyncTime
+            if (msSinceLastSync < 30 * 60 * 1000L) {
+                Log.d(TAG, "WorkManager: skipping — app synced ${msSinceLastSync / 1000}s ago (< 30 min).")
+                return Result.success()
+            }
+
             val success = if (autoSync && cloudGistUrl.isNotBlank()) {
-                Log.d(TAG, "Auto-sync is enabled. Fetching playlist and verifying streams: $cloudGistUrl")
+                Log.d(TAG, "Auto-sync is enabled. Fetching playlist via Worker sync: $cloudGistUrl")
                 syncManager.syncWithCloudGistSuspend(cloudGistUrl)
             } else {
-                Log.d(TAG, "Auto-sync disabled or empty URL. Only verifying existing channels.")
-                syncManager.verifyAllChannelsSuspend()
+                Log.d(TAG, "Auto-sync disabled. Re-validating broken channels via Worker batch API.")
+                syncManager.verifyBrokenChannelsViaWorker()
+                true
             }
 
             if (success) {
@@ -62,11 +73,15 @@ class ChannelValidationWorker(
                 .setRequiresBatteryNotLow(true)
                 .build()
 
-            // Run periodically (every 12 hours) to validate links and stay updated
+            // Run periodically (every 12 hours) to validate links and stay updated.
+            // setInitialDelay(30 min) ensures this NEVER fires simultaneously with the
+            // ViewModel's startup sync on the very first install — avoiding the double-sync
+            // that was causing the 10-minute first-open delay.
             val periodicWorkRequest = PeriodicWorkRequestBuilder<ChannelValidationWorker>(
                 12, TimeUnit.HOURS
             )
                 .setConstraints(constraints)
+                .setInitialDelay(30, TimeUnit.MINUTES)
                 .build()
 
             val policy = if (forceReplace) {
@@ -80,7 +95,7 @@ class ChannelValidationWorker(
                 policy,
                 periodicWorkRequest
             )
-            Log.i(TAG, "Scheduled periodic channel validation & sync work (every 12 hours, unmeteredOnly=$unmeteredOnly, batteryNotLow=true, policy=$policy).")
+            Log.i(TAG, "Scheduled periodic channel validation & sync work (every 12 hours, initialDelay=30min, unmeteredOnly=$unmeteredOnly, batteryNotLow=true, policy=$policy).")
         }
 
         fun forceOneTimeSync(context: Context) {

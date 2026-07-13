@@ -48,7 +48,7 @@ object M3uParserService {
         memoryCache[url] = content
         try {
             val file = getProtectedPlaylistFile(context, url)
-            val encrypted = StreamDecryptionUtility.encrypt(content)
+            val encrypted = StreamDecryptionUtility.encrypt(content, context)
             file.writeText(encrypted, java.nio.charset.StandardCharsets.UTF_8)
             Log.i(TAG, "Playlist securely saved to protected file directory (encrypted).")
         } catch (e: Exception) {
@@ -66,7 +66,7 @@ object M3uParserService {
             val file = getProtectedPlaylistFile(context, url)
             if (file.exists()) {
                 val encrypted = file.readText(java.nio.charset.StandardCharsets.UTF_8)
-                val decrypted = StreamDecryptionUtility.decrypt(encrypted)
+                val decrypted = StreamDecryptionUtility.decrypt(encrypted, context)
                 if (decrypted.isNotEmpty() && decrypted != encrypted) {
                     memoryCache[url] = decrypted
                     Log.i(TAG, "Playlist securely loaded from protected file directory (decrypted).")

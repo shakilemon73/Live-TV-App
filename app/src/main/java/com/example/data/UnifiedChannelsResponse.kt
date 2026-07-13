@@ -13,7 +13,8 @@ data class UnifiedCategory(
 data class UnifiedStream(
     @Json(name = "url") val url: String,
     @Json(name = "name") val name: String,
-    @Json(name = "isBroken") val isBroken: Boolean = false
+    @Json(name = "isBroken") val isBroken: Boolean = false,
+    @Json(name = "validationReason") val validationReason: String? = "not_checked"
 )
 
 @JsonClass(generateAdapter = true)
@@ -31,6 +32,8 @@ data class UnifiedChannel(
 @JsonClass(generateAdapter = true)
 data class UnifiedChannelsResponse(
     @Json(name = "updatedAt") val updatedAt: Long,
+    @Json(name = "lastChangeAt") val lastChangeAt: Long = 0L,
+    @Json(name = "changed") val changed: Boolean = true,
     @Json(name = "categories") val categories: List<UnifiedCategory>,
     @Json(name = "channels") val channels: List<UnifiedChannel>
 )

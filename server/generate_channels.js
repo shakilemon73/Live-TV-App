@@ -183,34 +183,88 @@ function parseM3u(text) {
     return channels;
 }
 
+function parsePipeStreamUrl(streamUrl) {
+    const parts = streamUrl.split("|");
+    const cleanUrl = parts[0];
+    const customHeaders = {};
+    if (parts.length > 1) {
+        const params = parts[1].split("&");
+        params.forEach(param => {
+            const kv = param.split("=", 2);
+            if (kv.length === 2) {
+                customHeaders[kv[0]] = decodeURIComponent(kv[1]);
+            }
+        });
+    }
+    return { cleanUrl, customHeaders };
+}
+
 // Stream Checker (HEAD or small GET, returns true if working)
 function validateStreamUrl(url) {
     return new Promise((resolve) => {
-        const urlObj = new URL(url);
+        const { cleanUrl, customHeaders } = parsePipeStreamUrl(url);
+        
+        let urlObj;
+        try {
+            urlObj = new URL(cleanUrl);
+        } catch (e) {
+            resolve(false);
+            return;
+        }
+        
         const protocol = urlObj.protocol === 'https:' ? https : http;
+        
+        const headers = {
+            'User-Agent': customHeaders['User-Agent'] || customHeaders['user-agent'] || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ExoPlayer/Client'
+        };
+        for (const [key, val] of Object.entries(customHeaders)) {
+            if (key.toLowerCase() !== 'user-agent') {
+                headers[key] = val;
+            }
+        }
         
         const options = {
             method: 'HEAD',
             hostname: urlObj.hostname,
             path: urlObj.pathname + urlObj.search,
             port: urlObj.port || undefined,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ExoPlayer/Client'
-            }
+            headers: headers
         };
 
         const req = protocol.request(options, (res) => {
             const status = res.statusCode;
             if (status >= 200 && status < 400) {
-                resolve(true);
+                const contentType = (res.headers['content-type'] || '').toLowerCase();
+                
+                // Block HTML response pages (which usually indicate dead streams or login redirection portals)
+                if (contentType.includes('text/html') && !cleanUrl.includes('.m3u8')) {
+                    resolve(false);
+                } else {
+                    const isValidSignature = 
+                        contentType.includes('application/x-mpegurl') ||
+                        contentType.includes('application/vnd.apple.mpegurl') ||
+                        contentType.includes('video/') ||
+                        contentType.includes('audio/') ||
+                        contentType.includes('application/dash+xml') ||
+                        contentType.includes('application/octet-stream') ||
+                        contentType.includes('binary/octet-stream') ||
+                        contentType === "";
+                        
+                    if (isValidSignature) {
+                        resolve(true);
+                    } else {
+                        // Unexpected signature, try GET
+                        retryWithGet(cleanUrl, headers).then(resolve);
+                    }
+                }
             } else {
                 // If HEAD fails, retry once with GET (some servers block HEAD)
-                retryWithGet(url).then(resolve);
+                retryWithGet(cleanUrl, headers).then(resolve);
             }
         });
 
         req.on('error', () => {
-            retryWithGet(url).then(resolve);
+            retryWithGet(cleanUrl, headers).then(resolve);
         });
 
         req.setTimeout(VALIDATION_TIMEOUT, () => {
@@ -222,25 +276,52 @@ function validateStreamUrl(url) {
     });
 }
 
-function retryWithGet(url) {
+function retryWithGet(cleanUrl, customHeaders) {
     return new Promise((resolve) => {
-        const urlObj = new URL(url);
+        let urlObj;
+        try {
+            urlObj = new URL(cleanUrl);
+        } catch (e) {
+            resolve(false);
+            return;
+        }
+        
         const protocol = urlObj.protocol === 'https:' ? https : http;
+        
+        const headers = {
+            ...customHeaders,
+            'Range': 'bytes=0-1024' // Download only first KB
+        };
         
         const options = {
             method: 'GET',
             hostname: urlObj.hostname,
             path: urlObj.pathname + urlObj.search,
             port: urlObj.port || undefined,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ExoPlayer/Client',
-                'Range': 'bytes=0-1024' // Download only first KB
-            }
+            headers: headers
         };
 
         const req = protocol.request(options, (res) => {
             const status = res.statusCode;
-            resolve(status >= 200 && status < 400);
+            if (status >= 200 && status < 400) {
+                const contentType = (res.headers['content-type'] || '').toLowerCase();
+                if (contentType.includes('text/html') && !cleanUrl.includes('.m3u8')) {
+                    resolve(false);
+                } else {
+                    const isValidSignature = 
+                        contentType.includes('application/x-mpegurl') ||
+                        contentType.includes('application/vnd.apple.mpegurl') ||
+                        contentType.includes('video/') ||
+                        contentType.includes('audio/') ||
+                        contentType.includes('application/dash+xml') ||
+                        contentType.includes('application/octet-stream') ||
+                        contentType.includes('binary/octet-stream') ||
+                        contentType === "";
+                    resolve(isValidSignature);
+                }
+            } else {
+                resolve(false);
+            }
         });
 
         req.on('error', () => {
